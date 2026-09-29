@@ -4,7 +4,7 @@
 
 A Library Management & Discovery Portal for the Modern Institute of Technology and Research Centre (MITRC), Alwar, Rajasthan. Built as a college internal hackathon project.
 
-> **Status: Design / documentation stage.** No application code exists yet. Everything below describes the *planned* system. See [docs/README.md](docs/README.md) for the full documentation index and status of each document.
+> **Status: Design/documentation stage.** No application code exists yet. Everything below describes the *planned* system. See [docs/README.md](docs/README.md) for the full documentation index and status of each document.
 
 ## 1. Overview
 LibSphere digitizes the complete library lifecycle:
@@ -24,7 +24,7 @@ A web portal where users search the catalogue, see live availability and rack/sh
 
 ## 4. Features
 - **MVP:** authentication, role-based dashboards, catalogue, search/filter/sort, availability, physical copies, borrow/return, suggestions, voting, librarian dashboard, in-app notifications.
-- **Strong enhancements:** reservations, waiting list, QR/barcode, fines, analytics, audit logs.
+- **Strong enhancements:** reservations, waiting list, fines, analytics, audit logs.
 - **Future scope:** AI recommendations, natural-language search, email notifications, library map, PWA/mobile, college SSO.
 
 ## 5. User Roles
