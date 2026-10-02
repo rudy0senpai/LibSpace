@@ -1,8 +1,7 @@
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, BarChart, Bar, PieChart, Pie, Cell, Legend } from 'recharts';
 const palette = ['#3567e8', '#7c5cff', '#24b6d9', '#20b486', '#f3b33d', '#f07b45', '#ef4c7a'];
 export function BorrowingTrend({ data = [] }) {
-    return
-    <ResponsiveContainer width="100%" height={250}>
+    return <ResponsiveContainer width="100%" height={250}>
         <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e8edf5" />
             <XAxis dataKey="month" />
@@ -13,8 +12,7 @@ export function BorrowingTrend({ data = [] }) {
     </ResponsiveContainer>;
 }
 export function CategoryBars({ data = [] }) {
-    return
-    <ResponsiveContainer width="100%" height={250}>
+    return <ResponsiveContainer width="100%" height={250}>
         <BarChart data={data} layout="vertical" margin={{ left: 20, right: 20 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e8edf5" />
             <XAxis type="number" allowDecimals={false} />
@@ -29,8 +27,7 @@ export function CategoryBars({ data = [] }) {
     </ResponsiveContainer>;
 }
 export function StudentFaculty({ data = [] }) {
-    return
-    <ResponsiveContainer width="100%" height={250}>
+    return <ResponsiveContainer width="100%" height={250}>
         <BarChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e8edf5" />
             <XAxis dataKey="period" />
@@ -43,8 +40,7 @@ export function StudentFaculty({ data = [] }) {
     </ResponsiveContainer>;
 }
 export function CopyStatus({ data = [] }) {
-    return
-    <ResponsiveContainer width="100%" height={250}>
+    return <ResponsiveContainer width="100%" height={250}>
         <PieChart>
             <Pie data={data} dataKey="count" nameKey="status" innerRadius={62} outerRadius={92} paddingAngle={2}>
                 {
@@ -57,8 +53,7 @@ export function CopyStatus({ data = [] }) {
     </ResponsiveContainer>;
 }
 export function SuggestionBars({ data = [] }) {
-    return
-    <ResponsiveContainer width="100%" height={250}>
+    return <ResponsiveContainer width="100%" height={250}>
         <BarChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e8edf5" />
             <XAxis dataKey="category_name" />
@@ -69,8 +64,7 @@ export function SuggestionBars({ data = [] }) {
     </ResponsiveContainer>;
 }
 export function Utilization({ data = [] }) {
-    return
-    <ResponsiveContainer width="100%" height={250}>
+    return <ResponsiveContainer width="100%" height={250}>
         <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e8edf5" />
             <XAxis dataKey="period" />

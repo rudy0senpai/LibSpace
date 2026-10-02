@@ -25,8 +25,7 @@ export function AuthProvider({ children }) {
     window.location.hash = '#/login';
   }, []);
   const value = useMemo(() => ({ session, user: session?.user || null, token: session?.access_token || null, signIn, signOut }), [session, signIn, signOut]);
-  return
-  <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

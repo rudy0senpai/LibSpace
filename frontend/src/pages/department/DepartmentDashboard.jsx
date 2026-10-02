@@ -17,8 +17,7 @@ export default function DepartmentDashboard() {
   const s = data?.summary || {};
   const c = data?.comparisons || {};
   const fmt = value => new Intl.NumberFormat('en-IN').format(value ?? 0);
-  return
-  <div className="app-shell">
+  return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-title">MITRC
@@ -177,8 +176,7 @@ export default function DepartmentDashboard() {
   </div>;
 }
 function Card({ icon, title, value, change, tone }) {
-  return
-  <div className={`kpi ${tone}`}>
+  return <div className={`kpi ${tone}`}>
     <div className="kpi-icon">{icon}</div>
     <div>
       <div className="kpi-value">{value}</div>
@@ -191,8 +189,7 @@ function Card({ icon, title, value, change, tone }) {
   </div>;
 }
 function Panel({ title, children, wide = false }) {
-  return
-  <section className={`panel ${wide ? 'wide' : ''}`}>
+  return <section className={`panel ${wide ? 'wide' : ''}`}>
     <div className="panel-head">
       <h3>{title}</h3>
     </div>

@@ -26,32 +26,28 @@ export default function AppRoutes() {
   if (!user) return <Login />;
 
   if (route === 'department' || (!route && user.role === 'DEPARTMENT')) {
-    return
-    <ProtectedRoute>
+    return <ProtectedRoute>
       <RoleRoute roles={['DEPARTMENT', 'ADMIN', 'LIBRARIAN']}>
         <DepartmentDashboard />
       </RoleRoute>
     </ProtectedRoute>;
   }
   if (route === 'librarian' || (!route && user.role === 'LIBRARIAN')) {
-    return
-    <ProtectedRoute>
+    return <ProtectedRoute>
       <RoleRoute roles={['LIBRARIAN', 'ADMIN']}>
         <LibrarianDashboard />
       </RoleRoute>
     </ProtectedRoute>;
   }
   if (route === 'student' || route === 'user' || (!route && ['STUDENT', 'FACULTY'].includes(user.role))) {
-    return
-    <ProtectedRoute>
+    return <ProtectedRoute>
       <RoleRoute roles={['STUDENT', 'FACULTY']}>
         <UserDashboard />
       </RoleRoute>
     </ProtectedRoute>;
   }
   if (route === 'admin' || user.role === 'ADMIN') {
-    return
-    <ProtectedRoute>
+    return <ProtectedRoute>
       <RoleRoute roles={['ADMIN']}>
         <DepartmentDashboard />
       </RoleRoute>

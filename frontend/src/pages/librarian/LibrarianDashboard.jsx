@@ -16,8 +16,7 @@ export default function LibrarianDashboard() {
   const [books, setBooks] = useState(booksSeed);
   const filtered = useMemo(() => books.filter(book => `${book.id} ${book.title} ${book.author}`.toLowerCase().includes(query.toLowerCase())), [books, query]);
   const nav = [['dashboard', LayoutDashboard, 'Dashboard'], ['catalogue', BookOpen, 'Manage Catalogue'], ['issue', ArrowUpFromLine, 'Issue Book'], ['return', ArrowDownToLine, 'Return Books'], ['suggestions', Lightbulb, 'Suggestions'], ['users', Users, 'Users']];
-  return
-  <div className="prototype-shell librarian-shell">
+  return <div className="prototype-shell librarian-shell">
     <aside className="prototype-sidebar librarian-sidebar">
       <div className="prototype-brand"><b>MITRC <span>LibSphere</span></b>
         <small>Library Management</small>
@@ -148,15 +147,13 @@ export default function LibrarianDashboard() {
   </div>
 }
 function Stat({ value, label }) {
-  return
-  <div className="prototype-stat">
+  return <div className="prototype-stat">
     <b>{value}</b>
     <small>{label}</small>
   </div>;
 }
 function Panel({ title, children }) {
-  return
-  <section className="prototype-panel">
+  return <section className="prototype-panel">
     <div className="prototype-panel-head">
       <b>{title}</b>
     </div>
@@ -166,8 +163,7 @@ function Panel({ title, children }) {
   </section>;
 }
 function FormPanel({ title, label, second, button }) {
-  return
-  <Panel title={title}>
+  return <Panel title={title}>
     <div className="prototype-form">
       <label>
         {label}
