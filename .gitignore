@@ -1,0 +1,77 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node.js / Frontend
+node_modules/
+frontend/node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+.vite/
+dist/
+build/
+*.local
+
+# Database
+*.sql.bak
+*.sql.tmp
+backups/
+*.dump
+*.backup
+*.db
+
+# Uploads
+uploads/
+frontend/public/uploads/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+.venv/logs/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+backend/.env
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+*.pyc
+__pycache__/

@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: mitrc-libsphere-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mitrc_libsphere
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - libsphere_pgdata:/var/lib/postgresql/data
+      - ./database/schema/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./database/seed/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+volumes:
+  libsphere_pgdata:

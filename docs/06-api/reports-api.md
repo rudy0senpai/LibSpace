@@ -1,4 +1,17 @@
 # Reports API
-**Status:** Planned
+**Status:** Implemented
 
-`GET /api/reports` (with type parameters TBD) — librarian dashboard totals, borrowing trends, categories, overdue trends, new books, suggestion demand; department role gets scoped statistics. Permission: REPORT_VIEW.
+## Department dashboard
+`GET /api/reports/department/dashboard`
+
+Query parameters:
+- `start_date`
+- `end_date`
+- `category_id`
+- `user_type` (`STUDENT` or `FACULTY`)
+- `suggestion_status`
+- `search`
+
+Authorization: authenticated `DEPARTMENT`, `LIBRARIAN` or `ADMIN` user. Department users are scoped to their authenticated department.
+
+The response contains database-derived KPIs, period comparisons, borrowing trend, category borrowing, student/faculty comparison, utilization, copy status, suggestion demand, overdue trend, top suggested books and suggestion records.

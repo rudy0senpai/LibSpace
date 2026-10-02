@@ -1,10 +1,13 @@
 # MITRC LibSphere
 
+> **Prototype name:** LibSpace  
+> **Website / project name:** LibSphere
+
 **Discover • Borrow • Suggest • Learn**
 
 A Library Management & Discovery Portal for the Modern Institute of Technology and Research Centre (MITRC), Alwar, Rajasthan. Built as a college internal hackathon project.
 
-> **Status: Design/documentation stage.** No application code exists yet. Everything below describes the *planned* system. See [docs/README.md](docs/README.md) for the full documentation index and status of each document.
+> **Status: Prototype implementation in progress.** The Vite/React entry point now routes authentication, student/faculty, librarian, and database-driven department dashboard views. The Department Dashboard consumes PostgreSQL data through FastAPI.
 
 ## 1. Overview
 LibSphere digitizes the complete library lifecycle:
