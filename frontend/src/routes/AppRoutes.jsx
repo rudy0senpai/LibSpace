@@ -26,16 +26,36 @@ export default function AppRoutes() {
   if (!user) return <Login />;
 
   if (route === 'department' || (!route && user.role === 'DEPARTMENT')) {
-    return <ProtectedRoute><RoleRoute roles={['DEPARTMENT', 'ADMIN', 'LIBRARIAN']}><DepartmentDashboard /></RoleRoute></ProtectedRoute>;
+    return
+    <ProtectedRoute>
+      <RoleRoute roles={['DEPARTMENT', 'ADMIN', 'LIBRARIAN']}>
+        <DepartmentDashboard />
+      </RoleRoute>
+    </ProtectedRoute>;
   }
   if (route === 'librarian' || (!route && user.role === 'LIBRARIAN')) {
-    return <ProtectedRoute><RoleRoute roles={['LIBRARIAN', 'ADMIN']}><LibrarianDashboard /></RoleRoute></ProtectedRoute>;
+    return
+    <ProtectedRoute>
+      <RoleRoute roles={['LIBRARIAN', 'ADMIN']}>
+        <LibrarianDashboard />
+      </RoleRoute>
+    </ProtectedRoute>;
   }
   if (route === 'student' || route === 'user' || (!route && ['STUDENT', 'FACULTY'].includes(user.role))) {
-    return <ProtectedRoute><RoleRoute roles={['STUDENT', 'FACULTY']}><UserDashboard /></RoleRoute></ProtectedRoute>;
+    return
+    <ProtectedRoute>
+      <RoleRoute roles={['STUDENT', 'FACULTY']}>
+        <UserDashboard />
+      </RoleRoute>
+    </ProtectedRoute>;
   }
   if (route === 'admin' || user.role === 'ADMIN') {
-    return <ProtectedRoute><RoleRoute roles={['ADMIN']}><DepartmentDashboard /></RoleRoute></ProtectedRoute>;
+    return
+    <ProtectedRoute>
+      <RoleRoute roles={['ADMIN']}>
+        <DepartmentDashboard />
+      </RoleRoute>
+    </ProtectedRoute>;
   }
 
   window.location.hash = '#/';

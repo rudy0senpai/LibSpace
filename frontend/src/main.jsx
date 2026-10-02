@@ -4,4 +4,8 @@ import App from './App.jsx';
 import './styles/dashboard.css';
 import './styles/prototype.css';
 
-createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);
+createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+        <App />
+    </React.StrictMode>
+);

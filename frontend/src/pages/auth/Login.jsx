@@ -39,7 +39,11 @@ export default function Login() {
         <button className="prototype-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign In'}</button>
       </form>
       {error && <div className="prototype-error">{error}</div>}
-      <div className="demo-row"><button onClick={() => useDemo('STUDENT')}>Student demo</button><button onClick={() => useDemo('DEPARTMENT')}>Department demo</button><button onClick={() => useDemo('LIBRARIAN')}>Librarian demo</button></div>
+      <div className="demo-row">
+        <button onClick={() => useDemo('STUDENT')}>Student demo</button>
+        <button onClick={() => useDemo('DEPARTMENT')}>Department demo</button>
+        <button onClick={() => useDemo('LIBRARIAN')}>Librarian demo</button>
+      </div>
       <small>Prototype name: <b>LibSpace</b> · Website/project name: <b>LibSphere</b></small>
     </div>
   </div>;
