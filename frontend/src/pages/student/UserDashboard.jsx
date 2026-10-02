@@ -132,21 +132,24 @@ export default function UserDashboard() {
   </div>;
 }
 function Stat({ value, label }) {
-  return <div className="prototype-stat">
+  return (
+  <div className="prototype-stat">
     <b>{value}</b>
     <small>{label}</small>
-  </div>;
+  </div>);
 }
 function Panel({ title, children }) {
-  return <section className="prototype-panel">
+  return (
+  <section className="prototype-panel">
     <div className="prototype-panel-head">
       <b>{title}</b>
     </div>
     <div className="prototype-panel-body">{children}</div>
-  </section>;
+  </section>);
 }
 function BookRow({ book, onReturn }) {
-  return <div className="prototype-book-row">
+  return (
+  <div className="prototype-book-row">
     <div>
       <b>{book.title}</b>
       <small>{book.rack}</small>
@@ -156,5 +159,5 @@ function BookRow({ book, onReturn }) {
       {book.status}
     </em>
     <button onClick={onReturn}>Return</button>
-  </div>;
+  </div>);
 }

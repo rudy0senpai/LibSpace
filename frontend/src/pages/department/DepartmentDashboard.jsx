@@ -17,7 +17,8 @@ export default function DepartmentDashboard() {
   const s = data?.summary || {};
   const c = data?.comparisons || {};
   const fmt = value => new Intl.NumberFormat('en-IN').format(value ?? 0);
-  return <div className="app-shell">
+  return (
+  <div className="app-shell">
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-title">MITRC
@@ -173,10 +174,11 @@ export default function DepartmentDashboard() {
               <div className="loading">No dashboard data returned.</div>}
       </div>
     </main>
-  </div>;
+  </div>);
 }
 function Card({ icon, title, value, change, tone }) {
-  return <div className={`kpi ${tone}`}>
+  return (
+  <div className={`kpi ${tone}`}>
     <div className="kpi-icon">{icon}</div>
     <div>
       <div className="kpi-value">{value}</div>
@@ -186,15 +188,16 @@ function Card({ icon, title, value, change, tone }) {
           {Math.abs(change)}% vs previous period</div> :
         <div className="change muted">Insufficient historical data</div>}
     </div>
-  </div>;
+  </div>);
 }
 function Panel({ title, children, wide = false }) {
-  return <section className={`panel ${wide ? 'wide' : ''}`}>
+  return (
+  <section className={`panel ${wide ? 'wide' : ''}`}>
     <div className="panel-head">
       <h3>{title}</h3>
     </div>
     <div className="panel-body">{children}</div>
-  </section>;
+  </section>);
 }
 function SuggestionTable({ rows }) {
   return rows.length === 0 ?
