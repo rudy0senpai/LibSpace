@@ -28,23 +28,24 @@ export default function Login() {
     setEmail(DEMOS[role].email); setPassword(DEMOS[role].password); setError('');
   }
 
-  return <div className="prototype-login">
-    <div className="prototype-login-card">
-      <div className="prototype-logo">MITRC <span>LibSphere</span></div>
-      <p className="prototype-muted">Library Management & Discovery Portal</p>
-      <h1>Sign in to your library account</h1>
-      <form onSubmit={submit}>
-        <label>Email<input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
-        <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
-        <button className="prototype-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign In'}</button>
-      </form>
-      {error && <div className="prototype-error">{error}</div>}
-      <div className="demo-row">
-        <button onClick={() => useDemo('STUDENT')}>Student demo</button>
-        <button onClick={() => useDemo('DEPARTMENT')}>Department demo</button>
-        <button onClick={() => useDemo('LIBRARIAN')}>Librarian demo</button>
+  return (
+    <div className="prototype-login">
+      <div className="prototype-login-card">
+        <div className="prototype-logo">MITRC <span>LibSphere</span></div>
+        <p className="prototype-muted">Library Management & Discovery Portal</p>
+        <h1>Sign in to your library account</h1>
+        <form onSubmit={submit}>
+          <label>Email<input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
+          <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
+          <button className="prototype-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign In'}</button>
+        </form>
+        {error && <div className="prototype-error">{error}</div>}
+        <div className="demo-row">
+          <button onClick={() => useDemo('STUDENT')}>Student demo</button>
+          <button onClick={() => useDemo('DEPARTMENT')}>Department demo</button>
+          <button onClick={() => useDemo('LIBRARIAN')}>Librarian demo</button>
+        </div>
+        <small>Prototype name: <b>LibSpace</b> · Website/project name: <b>LibSphere</b></small>
       </div>
-      <small>Prototype name: <b>LibSpace</b> · Website/project name: <b>LibSphere</b></small>
-    </div>
-  </div>;
+    </div>);
 }
