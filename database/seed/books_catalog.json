@@ -1,0 +1,1145 @@
+{
+  "source": "Open Library Search API (see work keys; metadata imported 2026-10-12)",
+  "books": [
+    {
+      "title": "Clean Code",
+      "authors": [
+        "Robert C. Martin"
+      ],
+      "year": 2008,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL17618370W"
+    },
+    {
+      "title": "The Pragmatic Programmer",
+      "authors": [
+        "Andy Hunt",
+        "Dave Thomas"
+      ],
+      "year": 1999,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL5748544W"
+    },
+    {
+      "title": "Code Complete",
+      "authors": [
+        "Steve McConnell"
+      ],
+      "year": 1993,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL2722063W"
+    },
+    {
+      "title": "Refactoring",
+      "authors": [
+        "Martin Fowler"
+      ],
+      "year": 1999,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL16551230W"
+    },
+    {
+      "title": "Design Patterns",
+      "authors": [
+        "Erich Gamma",
+        "Richard Helm",
+        "Ralph Johnson",
+        "John Vlissides"
+      ],
+      "year": 1995,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL6030812W"
+    },
+    {
+      "title": "The Mythical Man-Month",
+      "authors": [
+        "Frederick P. Brooks"
+      ],
+      "year": 1974,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL3510570W"
+    },
+    {
+      "title": "Clean Architecture",
+      "authors": [
+        "Robert C. Martin"
+      ],
+      "year": 2017,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL19809141W"
+    },
+    {
+      "title": "Working Effectively with Legacy Code",
+      "authors": [
+        "Michael C. Feathers"
+      ],
+      "year": 2004,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL5742702W"
+    },
+    {
+      "title": "Software Engineering at Google",
+      "authors": [
+        "Titus Winters",
+        "Tom Manshreck",
+        "Hyrum Wright"
+      ],
+      "year": 2020,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL22293580W"
+    },
+    {
+      "title": "A Philosophy of Software Design",
+      "authors": [
+        "John K. Ousterhout"
+      ],
+      "year": 2018,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL21221785W"
+    },
+    {
+      "title": "Domain-Driven Design",
+      "authors": [
+        "Eric Evans"
+      ],
+      "year": 2003,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL4464385W"
+    },
+    {
+      "title": "Head First Design Patterns",
+      "authors": [
+        "Eric Freeman",
+        "Elisabeth Freeman",
+        "Kathy Sierra",
+        "Bert Bates"
+      ],
+      "year": 2004,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL16942701W"
+    },
+    {
+      "title": "Release It!",
+      "authors": [
+        "Michael T. Nygard"
+      ],
+      "year": 2007,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL8848832W"
+    },
+    {
+      "title": "Peopleware",
+      "authors": [
+        "Tom DeMarco",
+        "Timothy Lister"
+      ],
+      "year": 1987,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL38240W"
+    },
+    {
+      "title": "The DevOps Handbook",
+      "authors": [
+        "Gene Kim"
+      ],
+      "year": 2016,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL19730495W"
+    },
+    {
+      "title": "The Phoenix Project",
+      "authors": [
+        "Gene Kim",
+        "Kevin Behr",
+        "George Spafford"
+      ],
+      "year": 2013,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL16806686W"
+    },
+    {
+      "title": "Continuous Delivery",
+      "authors": [
+        "Jez Humble",
+        "David Farley"
+      ],
+      "year": 2010,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL16420058W"
+    },
+    {
+      "title": "Effective Java",
+      "authors": [
+        "Joshua Bloch"
+      ],
+      "year": 2001,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL6223299W"
+    },
+    {
+      "title": "The C++ Programming Language",
+      "authors": [
+        "Bjarne Stroustrup"
+      ],
+      "year": 1985,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL53184W"
+    },
+    {
+      "title": "Fluent Python",
+      "authors": [
+        "Luciano Ramalho"
+      ],
+      "year": 2015,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL19932156W"
+    },
+    {
+      "title": "Python Crash Course",
+      "authors": [
+        "Eric Matthes"
+      ],
+      "year": 2015,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL17920482W"
+    },
+    {
+      "title": "Learning Python",
+      "authors": [
+        "Mark Lutz",
+        "David Ascher"
+      ],
+      "year": 1999,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL2784125W"
+    },
+    {
+      "title": "Think Python",
+      "authors": [
+        "Allen B. Downey"
+      ],
+      "year": 2009,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL16976951W"
+    },
+    {
+      "title": "Automate the Boring Stuff with Python",
+      "authors": [
+        "Al Sweigart"
+      ],
+      "year": 2015,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL17192141W"
+    },
+    {
+      "title": "Eloquent JavaScript",
+      "authors": [
+        "Marijn Haverbeke"
+      ],
+      "year": 2009,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL15444205W"
+    },
+    {
+      "title": "The Rust Programming Language",
+      "authors": [
+        "Steve Klabnik",
+        "Carol Nichols"
+      ],
+      "year": 2018,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL19080231W"
+    },
+    {
+      "title": "Kotlin in Action",
+      "authors": [
+        "Dmitry Jemerov",
+        "Svetlana Isakova"
+      ],
+      "year": 2017,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL19541946W"
+    },
+    {
+      "title": "Programming in Scala",
+      "authors": [
+        "Martin Odersky",
+        "Lex Spoon",
+        "Bill Venners"
+      ],
+      "year": 2008,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL15328350W"
+    },
+    {
+      "title": "You Don’t Know JS Yet",
+      "authors": [
+        "Kyle Simpson"
+      ],
+      "year": 2019,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL27032590W"
+    },
+    {
+      "title": "Java Concurrency in Practice",
+      "authors": [
+        "Brian Goetz",
+        "Joshua Bloch",
+        "Joseph Bowbeer",
+        "Doug Lea",
+        "David Holmes",
+        "Tim Peierls"
+      ],
+      "year": 2006,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL16512736W"
+    },
+    {
+      "title": "The Art of Computer Programming",
+      "authors": [
+        "Donald Knuth"
+      ],
+      "year": 1968,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL257263W"
+    },
+    {
+      "title": "Programming Pearls",
+      "authors": [
+        "Jon Bentley"
+      ],
+      "year": 1999,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL8021453W"
+    },
+    {
+      "title": "Structure and Interpretation of Computer Programs",
+      "authors": [
+        "Harold Abelson",
+        "Gerald J. Sussman",
+        "Julie Sussman"
+      ],
+      "year": 1989,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL39109952W"
+    },
+    {
+      "title": "The Little Schemer",
+      "authors": [
+        "Daniel P. Friedman",
+        "Matthias Felleisen"
+      ],
+      "year": 1995,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL2938928W"
+    },
+    {
+      "title": "Introduction to Computation and Programming Using Python",
+      "authors": [
+        "John Guttag"
+      ],
+      "year": 2013,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL17575152W"
+    },
+    {
+      "title": "The Art of Unix Programming",
+      "authors": [
+        "Eric S. Raymond"
+      ],
+      "year": 2003,
+      "category": "Programming",
+      "openlibrary_work": "/works/OL6036022W"
+    },
+    {
+      "title": "Introduction to Algorithms",
+      "authors": [
+        "Thomas H. Cormen",
+        "Charles E. Leiserson",
+        "Ronald L. Rivest",
+        "Clifford Stein"
+      ],
+      "year": 1990,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL4781294W"
+    },
+    {
+      "title": "The Algorithm Design Manual",
+      "authors": [
+        "Steven S. Skiena"
+      ],
+      "year": 1998,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL2677499W"
+    },
+    {
+      "title": "Algorithms",
+      "authors": [
+        "Robert Sedgewick"
+      ],
+      "year": 2011,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL16116506W"
+    },
+    {
+      "title": "Grokking Algorithms",
+      "authors": [
+        "Aditya Y. Bhargava"
+      ],
+      "year": 2016,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL19546865W"
+    },
+    {
+      "title": "Data Structures and Algorithms in Python",
+      "authors": [
+        "Michael T. Goodrich",
+        "Roberto Tamassia",
+        "Michael H Goldwasser"
+      ],
+      "year": 2012,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL19548248W"
+    },
+    {
+      "title": "Algorithms Unlocked",
+      "authors": [
+        "Thomas H. Cormen"
+      ],
+      "year": 2013,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL17832792W"
+    },
+    {
+      "title": "Algorithms in C",
+      "authors": [
+        "Robert Sedgewick"
+      ],
+      "year": 1990,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL21426085W"
+    },
+    {
+      "title": "The Design and Analysis of Algorithms",
+      "authors": [
+        "Nitin Upadhyay"
+      ],
+      "year": 2007,
+      "category": "Algorithms",
+      "openlibrary_work": "/works/OL10248540W"
+    },
+    {
+      "title": "Database System Concepts",
+      "authors": [
+        "Abraham Silberschatz",
+        "Henry F. Korth",
+        "S. Sudarshan"
+      ],
+      "year": 1997,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL1854539W"
+    },
+    {
+      "title": "Fundamentals of Database Systems",
+      "authors": [
+        "Ramez Elmasri",
+        "Shamkant B. Navathe"
+      ],
+      "year": 1989,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL3947220W"
+    },
+    {
+      "title": "Database Internals",
+      "authors": [
+        "Alex Petrov"
+      ],
+      "year": 2019,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL21360140W"
+    },
+    {
+      "title": "Designing Data-Intensive Applications",
+      "authors": [
+        "Martin Kleppmann"
+      ],
+      "year": 2017,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL19293745W"
+    },
+    {
+      "title": "SQL Antipatterns",
+      "authors": [
+        "Bill Karwin"
+      ],
+      "year": 2010,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL16178433W"
+    },
+    {
+      "title": "Learning SQL",
+      "authors": [
+        "Alan Beaulieu"
+      ],
+      "year": 2005,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL19882532W"
+    },
+    {
+      "title": "The Data Warehouse Toolkit",
+      "authors": [
+        "Ralph Kimball",
+        "Margy Ross"
+      ],
+      "year": 1996,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL2983865W"
+    },
+    {
+      "title": "Database Design for Mere Mortals",
+      "authors": [
+        "Michael J. Hernandez"
+      ],
+      "year": 1996,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL2945002W"
+    },
+    {
+      "title": "Seven Databases in Seven Weeks",
+      "authors": [
+        "Eric Redmond"
+      ],
+      "year": 2012,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL16551338W"
+    },
+    {
+      "title": "SQL Performance Explained",
+      "authors": [
+        "Markus Winand"
+      ],
+      "year": 2011,
+      "category": "Databases",
+      "openlibrary_work": "/works/OL15667878W"
+    },
+    {
+      "title": "Operating System Concepts",
+      "authors": [
+        "Abraham Silberschatz"
+      ],
+      "year": 1988,
+      "category": "Operating Systems",
+      "openlibrary_work": "/works/OL1854541W"
+    },
+    {
+      "title": "Modern Operating Systems",
+      "authors": [
+        "Andrew S. Tanenbaum",
+        "Herbert Bos"
+      ],
+      "year": 1992,
+      "category": "Operating Systems",
+      "openlibrary_work": "/works/OL1970688W"
+    },
+    {
+      "title": "Linux Kernel Development",
+      "authors": [
+        "Robert Love"
+      ],
+      "year": 2004,
+      "category": "Operating Systems",
+      "openlibrary_work": "/works/OL5739563W"
+    },
+    {
+      "title": "Understanding the Linux Kernel",
+      "authors": [
+        "Daniel P. Bovet"
+      ],
+      "year": 2000,
+      "category": "Operating Systems",
+      "openlibrary_work": "/works/OL3940957W"
+    },
+    {
+      "title": "Advanced Programming in the UNIX Environment",
+      "authors": [
+        "W. Richard Stevens",
+        "Stephen A. Rago"
+      ],
+      "year": 1992,
+      "category": "Operating Systems",
+      "openlibrary_work": "/works/OL2705899W"
+    },
+    {
+      "title": "Computer Networking: A Top-Down Approach",
+      "authors": [
+        "James Kurose",
+        "Keith Ross"
+      ],
+      "year": 2000,
+      "category": "Networks",
+      "openlibrary_work": "/works/OL45032796W"
+    },
+    {
+      "title": "Computer Networks",
+      "authors": [
+        "Andrew S. Tanenbaum"
+      ],
+      "year": 1981,
+      "category": "Networks",
+      "openlibrary_work": "/works/OL1970691W"
+    },
+    {
+      "title": "TCP/IP Illustrated",
+      "authors": [
+        "W. Richard Stevens",
+        "Kevin R. Fall",
+        "Gary R. Wright"
+      ],
+      "year": 1993,
+      "category": "Networks",
+      "openlibrary_work": "/works/OL2705896W"
+    },
+    {
+      "title": "Data and Computer Communications",
+      "authors": [
+        "William Stallings"
+      ],
+      "year": 1985,
+      "category": "Networks",
+      "openlibrary_work": "/works/OL1865016W"
+    },
+    {
+      "title": "Computer Networks and Internets",
+      "authors": [
+        "Douglas E. Comer"
+      ],
+      "year": 1997,
+      "category": "Networks",
+      "openlibrary_work": "/works/OL1987866W"
+    },
+    {
+      "title": "Network Security Essentials",
+      "authors": [
+        "William Stallings"
+      ],
+      "year": 1999,
+      "category": "Networks",
+      "openlibrary_work": "/works/OL4606540W"
+    },
+    {
+      "title": "Internetworking with TCP/IP",
+      "authors": [
+        "Douglas E. Comer",
+        "David L. Stevens",
+        "Michael Evangelista"
+      ],
+      "year": 1988,
+      "category": "Networks",
+      "openlibrary_work": "/works/OL1987869W"
+    },
+    {
+      "title": "Deep Learning",
+      "authors": [
+        "Ian Goodfellow",
+        "Yoshua Bengio",
+        "Aaron Courville",
+        "Francis Bach"
+      ],
+      "year": 2016,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL17801809W"
+    },
+    {
+      "title": "Hands-On Machine Learning with Scikit-Learn, Keras, and TensorFlow",
+      "authors": [
+        "Aurélien Géron"
+      ],
+      "year": 2019,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL20709638W"
+    },
+    {
+      "title": "Pattern Recognition and Machine Learning",
+      "authors": [
+        "Christopher M. Bishop"
+      ],
+      "year": 2006,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL20728101W"
+    },
+    {
+      "title": "The Hundred-Page Machine Learning Book",
+      "authors": [
+        "Andriy Burkov"
+      ],
+      "year": 2019,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL21654311W"
+    },
+    {
+      "title": "An Introduction to Statistical Learning",
+      "authors": [
+        "Gareth James",
+        "Daniela Witten",
+        "Trevor Hastie",
+        "Robert Tibshirani"
+      ],
+      "year": 2013,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL19859252W"
+    },
+    {
+      "title": "The Elements of Statistical Learning",
+      "authors": [
+        "Trevor Hastie",
+        "Robert Tibshirani",
+        "Jerome Friedman"
+      ],
+      "year": 2001,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL4147338W"
+    },
+    {
+      "title": "Mining of Massive Datasets",
+      "authors": [
+        "Anand Rajaraman",
+        "Jeffrey D. Ullman",
+        "Jure Leskovec"
+      ],
+      "year": 2012,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL16970048W"
+    },
+    {
+      "title": "Python for Data Analysis",
+      "authors": [
+        "Wes McKinney"
+      ],
+      "year": 2012,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL17422847W"
+    },
+    {
+      "title": "Data Science from Scratch",
+      "authors": [
+        "Joel Grus"
+      ],
+      "year": 2015,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL20006690W"
+    },
+    {
+      "title": "R for Data Science",
+      "authors": [
+        "Hadley Wickham",
+        "Garrett Grolemund"
+      ],
+      "year": 2017,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL19546309W"
+    },
+    {
+      "title": "Hands-On Data Analysis with Pandas",
+      "authors": [
+        "Stefanie Molin"
+      ],
+      "year": 2019,
+      "category": "AI and Machine Learning",
+      "openlibrary_work": "/works/OL25237754W"
+    },
+    {
+      "title": "Introduction to Probability",
+      "authors": [
+        "Dimitri P. Bertsekas",
+        "John N. Tsitsiklis"
+      ],
+      "year": 2008,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL17816074W"
+    },
+    {
+      "title": "Linear Algebra and Its Applications",
+      "authors": [
+        "David C. Lay",
+        "Steven R. Lay",
+        "Judi J. McDonald"
+      ],
+      "year": 2015,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL47604W"
+    },
+    {
+      "title": "Calculus",
+      "authors": [
+        "James Stewart"
+      ],
+      "year": 1986,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL100903W"
+    },
+    {
+      "title": "Discrete Mathematics and Its Applications",
+      "authors": [
+        "Kenneth H. Rosen"
+      ],
+      "year": 1988,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL31821W"
+    },
+    {
+      "title": "How to Prove It",
+      "authors": [
+        "Daniel J. Velleman"
+      ],
+      "year": 1994,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL3918291W"
+    },
+    {
+      "title": "Numerical Analysis",
+      "authors": [
+        "Richard L. Burden"
+      ],
+      "year": 1978,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL3283261W"
+    },
+    {
+      "title": "Introduction to Linear Algebra",
+      "authors": [
+        "Gilbert Strang"
+      ],
+      "year": 1998,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL3285486W"
+    },
+    {
+      "title": "Statistics",
+      "authors": [
+        "David S. Moore"
+      ],
+      "year": 1979,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL74076W"
+    },
+    {
+      "title": "The Art of Statistics",
+      "authors": [
+        "David Spiegelhalter"
+      ],
+      "year": 2019,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL20740482W"
+    },
+    {
+      "title": "Concrete Mathematics",
+      "authors": [
+        "Ronald L. Graham",
+        "Donald Knuth",
+        "Oren Patashnik"
+      ],
+      "year": 1988,
+      "category": "Mathematics",
+      "openlibrary_work": "/works/OL3951639W"
+    },
+    {
+      "title": "Computer Security: Principles and Practice",
+      "authors": [
+        "William Stallings",
+        "Lawrie Brown"
+      ],
+      "year": 2007,
+      "category": "Cybersecurity",
+      "openlibrary_work": "/works/OL21422028W"
+    },
+    {
+      "title": "Security Engineering",
+      "authors": [
+        "Ross J. Anderson"
+      ],
+      "year": 2001,
+      "category": "Cybersecurity",
+      "openlibrary_work": "/works/OL8229364W"
+    },
+    {
+      "title": "The Web Application Hacker’s Handbook",
+      "authors": [
+        "Dafydd Stuttard",
+        "Marcus Pinto"
+      ],
+      "year": 2007,
+      "category": "Cybersecurity",
+      "openlibrary_work": "/works/OL13814659W"
+    },
+    {
+      "title": "Cryptography and Network Security",
+      "authors": [
+        "William Stallings"
+      ],
+      "year": 2006,
+      "category": "Cybersecurity",
+      "openlibrary_work": "/works/OL18156276W"
+    },
+    {
+      "title": "Serious Cryptography",
+      "authors": [
+        "Jean-Philippe Aumasson"
+      ],
+      "year": 2017,
+      "category": "Cybersecurity",
+      "openlibrary_work": "/works/OL17912167W"
+    },
+    {
+      "title": "Practical Malware Analysis",
+      "authors": [
+        "Michael Sikorski",
+        "Andrew Honig"
+      ],
+      "year": 2012,
+      "category": "Cybersecurity",
+      "openlibrary_work": "/works/OL16509463W"
+    },
+    {
+      "title": "Applied Cryptography",
+      "authors": [
+        "Bruce Schneier"
+      ],
+      "year": 1994,
+      "category": "Cybersecurity",
+      "openlibrary_work": "/works/OL2905639W"
+    },
+    {
+      "title": "Computer Organization and Design",
+      "authors": [
+        "John L. Hennessy",
+        "David A. Patterson"
+      ],
+      "year": 1994,
+      "category": "Computer Architecture",
+      "openlibrary_work": "/works/OL2664272W"
+    },
+    {
+      "title": "Computer Architecture: A Quantitative Approach",
+      "authors": [
+        "John L. Hennessy",
+        "David A. Patterson"
+      ],
+      "year": 2019,
+      "category": "Computer Architecture",
+      "openlibrary_work": "/works/OL17914655W"
+    },
+    {
+      "title": "Digital Design",
+      "authors": [
+        "M. Morris Mano",
+        "Michael Ciletti"
+      ],
+      "year": 1984,
+      "category": "Computer Architecture",
+      "openlibrary_work": "/works/OL3281307W"
+    },
+    {
+      "title": "Structured Computer Organization",
+      "authors": [
+        "Andrew S. Tanenbaum"
+      ],
+      "year": 1975,
+      "category": "Computer Architecture",
+      "openlibrary_work": "/works/OL1970690W"
+    },
+    {
+      "title": "The Elements of Computing Systems",
+      "authors": [
+        "Noam Nisan",
+        "Shimon Schocken"
+      ],
+      "year": 2005,
+      "category": "Computer Architecture",
+      "openlibrary_work": "/works/OL19550033W"
+    },
+    {
+      "title": "Code",
+      "authors": [
+        "Charles Petzold"
+      ],
+      "year": 1999,
+      "category": "Computer Architecture",
+      "openlibrary_work": "/works/OL1972516W"
+    },
+    {
+      "title": "Digital Design and Computer Architecture",
+      "authors": [
+        "Sarah Harris",
+        "David Money Harris"
+      ],
+      "year": 2010,
+      "category": "Computer Architecture",
+      "openlibrary_work": "/works/OL20834231W"
+    },
+    {
+      "title": "Learning Web Design",
+      "authors": [
+        "Jennifer Niederst Robbins"
+      ],
+      "year": 2001,
+      "category": "Web Development",
+      "openlibrary_work": "/works/OL16028854W"
+    },
+    {
+      "title": "CSS Secrets",
+      "authors": [
+        "Lea Verou"
+      ],
+      "year": 2014,
+      "category": "Web Development",
+      "openlibrary_work": "/works/OL19723004W"
+    },
+    {
+      "title": "Web Design with HTML, CSS, JavaScript and jQuery",
+      "authors": [
+        "Jon Duckett"
+      ],
+      "year": 2014,
+      "category": "Web Development",
+      "openlibrary_work": "/works/OL21094818W"
+    },
+    {
+      "title": "Learning React",
+      "authors": [
+        "Alex Banks",
+        "Eve Porcello"
+      ],
+      "year": 2018,
+      "category": "Web Development",
+      "openlibrary_work": "/works/OL20915214W"
+    },
+    {
+      "title": "The Goal",
+      "authors": [
+        "Eliyahu M. Goldratt",
+        "Jeff Cox"
+      ],
+      "year": 1986,
+      "subtitle": "A Process of Ongoing Improvement",
+      "category": "Management",
+      "openlibrary_work": "/works/OL2463051W"
+    },
+    {
+      "title": "The Lean Startup",
+      "authors": [
+        "Eric Ries"
+      ],
+      "year": 2011,
+      "category": "Management",
+      "openlibrary_work": "/works/OL16086010W"
+    },
+    {
+      "title": "The Innovator’s Dilemma",
+      "authors": [
+        "Clayton M. Christensen"
+      ],
+      "year": 1997,
+      "category": "Management",
+      "openlibrary_work": "/works/OL1999873W"
+    },
+    {
+      "title": "Good to Great",
+      "authors": [
+        "Jim Collins"
+      ],
+      "year": 2001,
+      "category": "Management",
+      "openlibrary_work": "/works/OL3486275W"
+    },
+    {
+      "title": "The Fifth Discipline",
+      "authors": [
+        "Peter M. Senge"
+      ],
+      "year": 1990,
+      "category": "Management",
+      "openlibrary_work": "/works/OL4440692W"
+    },
+    {
+      "title": "Measure What Matters",
+      "authors": [
+        "John Doerr"
+      ],
+      "year": 2017,
+      "category": "Management",
+      "openlibrary_work": "/works/OL19746884W"
+    },
+    {
+      "title": "Thinking, Fast and Slow",
+      "authors": [
+        "Daniel Kahneman"
+      ],
+      "year": 2011,
+      "category": "Management",
+      "openlibrary_work": "/works/OL15992072W"
+    },
+    {
+      "title": "Deep Work",
+      "authors": [
+        "Cal Newport"
+      ],
+      "year": 2016,
+      "category": "Management",
+      "openlibrary_work": "/works/OL17713267W"
+    },
+    {
+      "title": "Getting Things Done",
+      "authors": [
+        "David Allen"
+      ],
+      "year": 2001,
+      "category": "Management",
+      "openlibrary_work": "/works/OL271504W"
+    },
+    {
+      "title": "Atomic Habits",
+      "authors": [
+        "James Clear"
+      ],
+      "year": 2018,
+      "category": "Management",
+      "openlibrary_work": "/works/OL17930368W"
+    },
+    {
+      "title": "The Effective Executive",
+      "authors": [
+        "Peter F Drucker"
+      ],
+      "year": 1967,
+      "category": "Management",
+      "openlibrary_work": "/works/OL43372163W"
+    },
+    {
+      "title": "The Personal MBA",
+      "authors": [
+        "Josh Kaufman"
+      ],
+      "year": 2010,
+      "category": "Management",
+      "openlibrary_work": "/works/OL15473892W"
+    },
+    {
+      "title": "Principles",
+      "authors": [
+        "Ray Dalio"
+      ],
+      "year": 2017,
+      "category": "Management",
+      "openlibrary_work": "/works/OL18147675W"
+    },
+    {
+      "title": "The Hard Thing About Hard Things",
+      "authors": [
+        "Ben Horowitz"
+      ],
+      "year": 2014,
+      "category": "Management",
+      "openlibrary_work": "/works/OL16818208W"
+    }
+  ]
+}

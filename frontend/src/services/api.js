@@ -1,16 +1,21 @@
-import { API } from './authService';
+import { apiRequest } from './authService';
 
 async function fetchWithAuth(url, options = {}) {
-  const token = localStorage.getItem('access_token');
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
-    ...options.headers,
-  };
-  const response = await fetch(`${API}${url}`, { ...options, headers });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || payload.error?.message || 'Request failed');
-  return payload;
+  let token = localStorage.getItem('access_token');
+  if (!token) {
+    try {
+      token = JSON.parse(localStorage.getItem('libsphere_session') || 'null')?.access_token || null;
+    } catch {
+      token = null;
+    }
+  }
+  return apiRequest(url, {
+    ...options,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+  });
 }
 
 export async function searchBooks(params = {}) {

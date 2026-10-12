@@ -1,13 +1,22 @@
 import enum
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import Column, String, Text, Integer, Boolean, Date, DateTime, ForeignKey, Enum, CheckConstraint, UniqueConstraint, func, Index, JSON, Table
+from sqlalchemy import Column, String, Text, Integer, Boolean, Date, DateTime, ForeignKey, Enum, CheckConstraint, UniqueConstraint, func, Index, JSON, Table, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import TypeDecorator, CHAR
 import uuid
 
 db = SQLAlchemy()
+
+
+@event.listens_for(Engine, "connect")
+def enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+    if dbapi_connection.__class__.__module__.startswith("sqlite3"):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 class GUID(TypeDecorator):
@@ -154,7 +163,7 @@ class User(db.Model):
     name = Column(String(150), nullable=False)
     email = Column(String(255), nullable=False, unique=True)
     password_hash = Column(Text, nullable=False)
-    role = Column(Enum(RoleType, native_enum=False), nullable=False)
+    role = Column(Enum(RoleType, name="role_type", native_enum=True), nullable=False)
     department_id = Column(GUID, ForeignKey("departments.id", ondelete="SET NULL"))
     enrollment_id = Column(String(50))
     employee_id = Column(String(50))
@@ -248,7 +257,7 @@ class BookCopy(db.Model):
     barcode = Column(String(100), nullable=False, unique=True)
     rack = Column(String(80), nullable=False)
     shelf = Column(String(80), nullable=False)
-    status = Column(Enum(CopyStatus, native_enum=False), nullable=False, default=CopyStatus.AVAILABLE)
+    status = Column(Enum(CopyStatus, name="copy_status", native_enum=True), nullable=False, default=CopyStatus.AVAILABLE)
     condition = Column(String(100), nullable=False, default="GOOD")
     acquired_at = Column(Date, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
@@ -271,7 +280,7 @@ class Loan(db.Model):
     issued_at = Column(DateTime(timezone=True), nullable=False)
     due_at = Column(DateTime(timezone=True), nullable=False)
     returned_at = Column(DateTime(timezone=True))
-    status = Column(Enum(LoanStatus, native_enum=False), nullable=False)
+    status = Column(Enum(LoanStatus, name="loan_status", native_enum=True), nullable=False)
     issued_by = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"))
     returned_to = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"))
     created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
@@ -298,7 +307,7 @@ class Reservation(db.Model):
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
     user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     book_id = Column(GUID, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
-    status = Column(Enum(ReservationStatus, native_enum=False), nullable=False, default=ReservationStatus.WAITING)
+    status = Column(Enum(ReservationStatus, name="reservation_status", native_enum=True), nullable=False, default=ReservationStatus.WAITING)
     position = Column(Integer)
     created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
     expires_at = Column(DateTime(timezone=True))
@@ -320,8 +329,8 @@ class Suggestion(db.Model):
     isbn = Column(String(20))
     category_id = Column(GUID, ForeignKey("categories.id", ondelete="SET NULL"))
     justification = Column(Text, nullable=False)
-    reason = Column(Enum(SuggestionReason, native_enum=False), nullable=False)
-    status = Column(Enum(SuggestionStatus, native_enum=False), nullable=False, default=SuggestionStatus.SUBMITTED)
+    reason = Column(Enum(SuggestionReason, name="suggestion_reason", native_enum=True), nullable=False)
+    status = Column(Enum(SuggestionStatus, name="suggestion_status", native_enum=True), nullable=False, default=SuggestionStatus.SUBMITTED)
     submitted_by = Column(GUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     reviewed_by = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"))
     reviewed_at = Column(DateTime(timezone=True))
@@ -360,7 +369,7 @@ class Notification(db.Model):
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
     user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    type = Column(Enum(NotificationType, native_enum=False), nullable=False)
+    type = Column(Enum(NotificationType, name="notification_type", native_enum=True), nullable=False)
     title = Column(String(200), nullable=False)
     message = Column(Text, nullable=False)
     is_read = Column(Boolean, nullable=False, default=False)
@@ -376,7 +385,7 @@ class Fine(db.Model):
     loan_id = Column(GUID, ForeignKey("loans.id", ondelete="CASCADE"), nullable=False, unique=True)
     overdue_days = Column(Integer, nullable=False, default=0)
     amount = Column(db.Numeric(10, 2), nullable=False, default=0)
-    status = Column(Enum(FineStatus, native_enum=False), nullable=False, default=FineStatus.NO_FINE)
+    status = Column(Enum(FineStatus, name="fine_status", native_enum=True), nullable=False, default=FineStatus.NO_FINE)
     created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now())
 

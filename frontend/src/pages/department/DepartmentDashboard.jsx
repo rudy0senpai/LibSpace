@@ -111,7 +111,7 @@ export default function DepartmentDashboard() {
               <span>{error}</span>
               <button onClick={reload}><RefreshCw size={15} />Retry</button>
             </div> : loading ?
-              <div className="loading">Loading department analytics from PostgreSQL…</div> : data ? <>
+              <div className="loading">Loading department analytics from the API…</div> : data ? <>
                 <div className="kpis">
                   <Card icon={<BookOpen />} title="Department Books" value={fmt(s.department_books)} change={c.department_books_change} tone="blue" />
                   <Card icon={<BookOpen />} title="Available Copies" value={fmt(s.available_copies)} change={c.available_copies_change} tone="green" />
@@ -143,7 +143,7 @@ export default function DepartmentDashboard() {
                 </div>
                 <div className="bottom-grid">
                   <Panel title="Book Suggestions" wide>
-                    <SuggestionTable rows={data.suggestions} />
+                    <SuggestionTable rows={data.suggestions?.items || []} />
                   </Panel>
                   <div className="side-stack">
                     <Panel title="Top Suggested Books">

@@ -71,7 +71,7 @@ export default function UserDashboard() {
     e.preventDefault();
     if (!suggestion.trim() || !user) return;
     try {
-      await createSuggestion({ title: suggestion.trim(), justification: 'Suggested by student', reason: 'COURSE_REQUIREMENT' });
+      await createSuggestion({ title: suggestion.trim(), justification: `Suggested by ${user?.role === 'FACULTY' ? 'faculty' : 'student'}`, reason: 'COURSE_REQUIREMENT' });
       setSuggestion('');
       await loadMySuggestions();
     } catch (e) {
@@ -133,7 +133,7 @@ export default function UserDashboard() {
         <header className="prototype-header">
           <div>
             <b>
-              {page === 'dashboard' ? 'Student Dashboard' :
+              {page === 'dashboard' ? (user?.role === 'FACULTY' ? 'Teacher Dashboard' : 'Student Dashboard') :
                page === 'search' ? 'Search Catalogue' :
                page === 'mybooks' ? 'My Books' :
                page === 'suggestions' ? 'Community Suggestions' : 'Notifications'}

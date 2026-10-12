@@ -1,20 +1,84 @@
+import os
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request
+from pathlib import Path
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from werkzeug.security import check_password_hash
 from datetime import datetime, timedelta
-from sqlalchemy import func, text, case
+from sqlalchemy.engine import URL
+from sqlalchemy import func, text, case, inspect, String
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
+from werkzeug.security import check_password_hash
+from werkzeug.exceptions import HTTPException
 
 from config import Config
 from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author
 
-app = Flask(__name__)
+BACKEND_INSTANCE_DIR = Path(__file__).resolve().parent / "instance"
+BACKEND_INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+app = Flask(__name__, instance_path=str(BACKEND_INSTANCE_DIR))
 app.config.from_object(Config)
+
 
 db.init_app(app)
 jwt = JWTManager(app)
-CORS(app, origins=[app.config.get("FRONTEND_URL", "http://localhost:5173")], supports_credentials=True)
+CORS(
+    app,
+    origins=app.config.get("CORS_ORIGINS", ("http://localhost:5173",)),
+    supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+
+
+@jwt.unauthorized_loader
+def missing_authorization(_reason):
+    return jsonify({"status": "error", "error": {
+        "code": "MISSING_AUTHORIZATION", "message": "Authentication is required."
+    }}), 401
+
+
+@jwt.invalid_token_loader
+def invalid_authorization(_reason):
+    return jsonify({"status": "error", "error": {
+        "code": "INVALID_TOKEN", "message": "The authentication token is invalid."
+    }}), 401
+
+
+@jwt.expired_token_loader
+def expired_authorization(_jwt_header, _jwt_payload):
+    return jsonify({"status": "error", "error": {
+        "code": "EXPIRED_TOKEN", "message": "The authentication token has expired."
+    }}), 401
+
+
+@app.errorhandler(SQLAlchemyError)
+def database_error(error):
+    db.session.rollback()
+    app.logger.error("Database request failed: %s", error)
+    return jsonify({"status": "error", "error": {
+        "code": "DATABASE_UNAVAILABLE", "message": "The database request could not be completed."
+    }}), 503
+
+
+@app.errorhandler(HTTPException)
+def http_error(error):
+    if not request.path.startswith("/api/"):
+        return error
+    return jsonify({"status": "error", "error": {
+        "code": f"HTTP_{error.code}", "message": error.description
+    }}), error.code
+
+
+@app.errorhandler(Exception)
+def unexpected_api_error(error):
+    if not request.path.startswith("/api/"):
+        raise error
+    app.logger.exception("Unhandled API error")
+    return jsonify({"status": "error", "error": {
+        "code": "INTERNAL_SERVER_ERROR", "message": "The request could not be completed."
+    }}), 500
 
 
 USER_TYPES = {"STUDENT", "FACULTY"}
@@ -22,6 +86,18 @@ SUGGESTION_STATUSES = {
     "SUBMITTED", "UNDER_REVIEW", "APPROVED", "ORDERED",
     "AVAILABLE", "REJECTED", "DUPLICATE", "ALREADY_AVAILABLE"
 }
+
+
+def month_bucket(column):
+    if db.engine.dialect.name == "sqlite":
+        return func.strftime("%Y-%m-01", column)
+    return func.date_trunc("month", column)
+
+
+def month_label(value):
+    if isinstance(value, datetime):
+        return value.strftime("%b")
+    return datetime.strptime(str(value)[:10], "%Y-%m-%d").strftime("%b")
 
 
 def validate_filters():
@@ -84,9 +160,9 @@ def get_department_dashboard_data(department_id, filters):
     search = filters.get("search")
 
     if not start_date:
-        start_date = "2026-04-01"
+        start_date = datetime.now().replace(day=1).strftime("%Y-%m-%d")
     if not end_date:
-        end_date = "2026-10-01"
+        end_date = (datetime.now().replace(day=1) + timedelta(days=32)).replace(day=1).strftime("%Y-%m-%d")
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
@@ -153,16 +229,10 @@ def get_department_dashboard_data(department_id, filters):
     ).scalar()
     kpis["suggestion_support"] = total_votes or 0
 
-    comparisons["department_books_change"] = 8.4
-    comparisons["available_copies_change"] = 4.1
-    comparisons["currently_borrowed_change"] = 12.7
-    comparisons["overdue_books_change"] = -18.2
-    comparisons["active_students_change"] = 3.6
-    comparisons["active_faculty_change"] = 2.1
-    comparisons["pending_suggestions_change"] = -6.7
+
 
     monthly_borrowing = db.session.query(
-        func.strftime('%Y-%m', Loan.issued_at).label('month'),
+        month_bucket(Loan.issued_at).label('month'),
         func.count(Loan.id).label('total_loans'),
         func.count(Loan.id).filter(User.role == RoleType.STUDENT).label('student_loans'),
         func.count(Loan.id).filter(User.role == RoleType.FACULTY).label('faculty_loans')
@@ -177,7 +247,7 @@ def get_department_dashboard_data(department_id, filters):
     ).group_by('month').order_by('month').all()
 
     charts["monthly_borrowing_trend"] = [
-        {"month": row.month[:3].capitalize() if isinstance(row.month, str) else row.month.strftime("%b"), "total_loans": row.total_loans} for row in monthly_borrowing
+        {"month": month_label(row.month), "total_loans": row.total_loans} for row in monthly_borrowing
     ]
 
     borrowing_by_category = db.session.query(
@@ -204,7 +274,7 @@ def get_department_dashboard_data(department_id, filters):
     ]
 
     student_vs_faculty = db.session.query(
-        func.strftime('%Y-%m', Loan.issued_at).label('month'),
+        month_bucket(Loan.issued_at).label('month'),
         func.count(Loan.id).filter(User.role == RoleType.STUDENT).label('students'),
         func.count(Loan.id).filter(User.role == RoleType.FACULTY).label('faculty')
     ).join(User, Loan.user_id == User.id).join(
@@ -218,11 +288,11 @@ def get_department_dashboard_data(department_id, filters):
     ).group_by('month').order_by('month').all()
 
     charts["student_vs_faculty_borrowing"] = [
-        {"period": row.month[:3].capitalize() if isinstance(row.month, str) else row.month.strftime("%b"), "students": row.students, "faculty": row.faculty} for row in student_vs_faculty
+        {"period": month_label(row.month), "students": row.students, "faculty": row.faculty} for row in student_vs_faculty
     ]
 
     utilization = db.session.query(
-        func.strftime('%Y-%m', Loan.issued_at).label('month'),
+        month_bucket(Loan.issued_at).label('month'),
         (func.count(Loan.id) * 100.0 / func.nullif(kpis["department_books"], 0)).label('utilization_rate')
     ).join(BookCopy, Loan.book_copy_id == BookCopy.id).join(
         Book, BookCopy.book_id == Book.id
@@ -233,7 +303,7 @@ def get_department_dashboard_data(department_id, filters):
     ).group_by('month').order_by('month').all()
 
     charts["department_book_utilization"] = [
-        {"period": row.month[:3].capitalize() if isinstance(row.month, str) else row.month.strftime("%b"), "utilization_rate": round(float(row.utilization_rate or 0), 1)} for row in utilization
+        {"period": month_label(row.month), "utilization_rate": round(float(row.utilization_rate or 0), 1)} for row in utilization
     ]
 
     charts["book_copy_status"] = [
@@ -258,7 +328,7 @@ def get_department_dashboard_data(department_id, filters):
     ]
 
     overdue_trend = db.session.query(
-        func.strftime('%Y-%m', Loan.due_at).label('month'),
+        month_bucket(Loan.due_at).label('month'),
         func.count(Loan.id).label('overdue_count')
     ).join(BookCopy, Loan.book_copy_id == BookCopy.id).join(
         Book, BookCopy.book_id == Book.id
@@ -270,7 +340,7 @@ def get_department_dashboard_data(department_id, filters):
     ).group_by('month').order_by('month').all()
 
     charts["overdue_trend"] = [
-        {"period": row.month[:3].capitalize() if isinstance(row.month, str) else row.month.strftime("%b"), "overdue_count": row.overdue_count} for row in overdue_trend
+        {"period": month_label(row.month), "overdue_count": row.overdue_count} for row in overdue_trend
     ]
 
     top_borrowed = db.session.query(
@@ -398,7 +468,7 @@ def get_department_dashboard_data(department_id, filters):
         "top_books": rankings["top_suggested_books"],
         "recent_suggestions": recent_list,
         "meta": {
-            "source": "PostgreSQL Database",
+            "source": f"{db.engine.dialect.name.upper()} Database",
             "is_demo": False,
             "generated_at": datetime.now().astimezone().isoformat()
         }
@@ -407,28 +477,85 @@ def get_department_dashboard_data(department_id, filters):
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({
-        "status": "success",
-        "message": "LibSphere backend is running"
-    }), 200
+    try:
+        db.session.execute(text("SELECT 1"))
+        inspector = inspect(db.engine)
+        required_tables = {"departments", "users", "books", "book_copies", "loans", "suggestions", "suggestion_votes"}
+        missing = sorted(required_tables - set(inspector.get_table_names()))
+        if missing:
+            return jsonify({
+                "status": "error",
+                "error": {
+                    "code": "DATABASE_SCHEMA_INCOMPLETE",
+                    "message": f"Database is reachable but required tables are missing: {', '.join(missing)}.",
+                },
+            }), 503
+        return jsonify({
+            "status": "success",
+            "message": "LibSphere backend is running",
+            "database": "ok",
+        }), 200
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Health check could not reach the database")
+        return jsonify({
+            "status": "error",
+            "error": {
+                "code": "DATABASE_UNAVAILABLE",
+                "message": "The backend is running but its database is unavailable.",
+            },
+        }), 503
 
 
 @app.route("/api/auth/login", methods=["POST"])
 def login():
-    data = request.get_json()
-    if not data:
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
         return jsonify({"status": "error", "error": {"code": "INVALID_REQUEST", "message": "Request body required"}}), 400
 
-    email = data.get("email")
-    password = data.get("password")
-
-    if not email or not password:
-        return jsonify({"status": "error", "error": {"code": "MISSING_CREDENTIALS", "message": "Email and password required"}}), 400
-
-    user = db.session.query(User).filter(User.email == email, User.is_active == True).first()
-
-    if not user or not check_password_hash(user.password_hash, password):
-        return jsonify({"status": "error", "error": {"code": "INVALID_CREDENTIALS", "message": "Invalid email or password"}}), 401
+    if app.config.get("APP_ENV") == "testing":
+        name = str(data.get("name", "")).strip()
+        user_id = str(data.get("user_id", "")).strip()
+        requested_role = str(data.get("role", "")).strip().upper()
+        if requested_role == "TEACHER":
+            requested_role = "FACULTY"
+        demo_profiles = {
+            ("Urvashi", "25EMCAD016", "STUDENT"),
+            ("Yashdeep", "25TECAD016", "FACULTY"),
+            ("Dhruv", "25DMCAD016", "DEPARTMENT"),
+            ("Sphere", "25LIB016", "LIBRARIAN"),
+        }
+        if (name, user_id, requested_role) not in demo_profiles:
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_IDENTITY", "message": "Name, user ID, and role did not match a permitted local testing profile."
+            }}), 401
+        role = RoleType(requested_role)
+        identifier_field = User.enrollment_id if role == RoleType.STUDENT else User.employee_id
+        user = db.session.query(User).filter(
+            User.name == name,
+            identifier_field == user_id,
+            User.role == role,
+            User.is_active.is_(True),
+        ).first()
+        if not user:
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_IDENTITY", "message": "The local testing profile is not present in the active database."
+            }}), 401
+    else:
+        email = str(data.get("email", "")).strip()
+        password = data.get("password")
+        if not email or not isinstance(password, str) or not password:
+            return jsonify({"status": "error", "error": {
+                "code": "MISSING_CREDENTIALS", "message": "Email and password are required."
+            }}), 400
+        user = db.session.query(User).filter(
+            User.email == email,
+            User.is_active.is_(True),
+        ).first()
+        if not user or not check_password_hash(user.password_hash, password):
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_CREDENTIALS", "message": "Invalid email or password."
+            }}), 401
 
     access_token = create_access_token(identity=str(user.id))
     return jsonify({
@@ -486,6 +613,39 @@ def department_dashboard():
         return jsonify({"status": "error", "error": {"code": "REPORT_GENERATION_FAILED", "message": "Unable to generate department dashboard report."}}), 500
 
 
+@app.route("/api/reports/librarian/dashboard", methods=["GET"])
+@jwt_required()
+def librarian_dashboard():
+    user = db.session.get(User, get_jwt_identity())
+    if not user:
+        return jsonify({"status": "error", "error": {
+            "code": "USER_NOT_FOUND", "message": "User not found"
+        }}), 404
+    if user.role != RoleType.LIBRARIAN:
+        return jsonify({"status": "error", "error": {
+            "code": "FORBIDDEN", "message": "Insufficient permissions"
+        }}), 403
+
+    summary = {
+        "total_books": db.session.query(func.count(Book.id)).scalar() or 0,
+        "total_copies": db.session.query(func.count(BookCopy.id)).scalar() or 0,
+        "available_copies": db.session.query(func.count(BookCopy.id)).filter(
+            BookCopy.status == CopyStatus.AVAILABLE
+        ).scalar() or 0,
+        "borrowed_copies": db.session.query(func.count(BookCopy.id)).filter(
+            BookCopy.status == CopyStatus.BORROWED
+        ).scalar() or 0,
+        "overdue_loans": db.session.query(func.count(Loan.id)).filter(
+            Loan.status == LoanStatus.OVERDUE
+        ).scalar() or 0,
+        "suggestion_votes": db.session.query(func.count(SuggestionVote.suggestion_id)).scalar() or 0,
+    }
+    return jsonify({"status": "success", "data": {
+        "summary": summary,
+        "meta": {"source": f"{db.engine.dialect.name.upper()} Database"},
+    }}), 200
+
+
 @app.route("/api/auth/me", methods=["GET"])
 @jwt_required()
 def me():
@@ -493,6 +653,8 @@ def me():
     user = db.session.get(User, current_user_id)
     if not user:
         return jsonify({"status": "error", "error": {"code": "USER_NOT_FOUND", "message": "User not found"}}), 404
+    if not user.is_active:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "This account is inactive."}}), 401
 
     return jsonify({
         "status": "success",
@@ -603,7 +765,7 @@ def my_suggestions():
 
         results = []
         for s in suggestions:
-            vote_count = db.session.query(func.count(SuggestionVote.id)).filter(SuggestionVote.suggestion_id == s.id).scalar()
+            vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(SuggestionVote.suggestion_id == s.id).scalar()
             results.append({
                 "id": str(s.id),
                 "title": s.title,
@@ -707,4 +869,8 @@ def list_categories():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    app.run(host="0.0.0.0", port=app.config.get("BACKEND_PORT", 5000), debug=True)
+    app.run(
+        host=app.config.get("BACKEND_HOST", "127.0.0.1"),
+        port=app.config.get("BACKEND_PORT", 5001),
+        debug=False,
+    )

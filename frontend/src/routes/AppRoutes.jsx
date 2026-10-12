@@ -12,7 +12,7 @@ function routeFromHash() {
 }
 
 export default function AppRoutes() {
-  const { user } = useAuth();
+  const { user, ready } = useAuth();
   const [route, setRoute] = useState(routeFromHash);
 
   useEffect(() => {
@@ -22,42 +22,30 @@ export default function AppRoutes() {
     return () => window.removeEventListener('hashchange', onHash);
   }, [user]);
 
-  if (route === 'login') return <Login />;
+  if (!ready) return <div className="auth-loading" role="status">Checking saved session…</div>;
+  if (route === 'login' && !user) return <Login />;
   if (!user) return <Login />;
 
-  if (route === 'department' || (!route && user.role === 'DEPARTMENT')) {
-    return (
-    <ProtectedRoute>
-      <RoleRoute roles={['DEPARTMENT', 'ADMIN', 'LIBRARIAN']}>
-        <DepartmentDashboard />
-      </RoleRoute>
-    </ProtectedRoute>);
-  }
-  if (route === 'librarian' || (!route && user.role === 'LIBRARIAN')) {
-    return (
-    <ProtectedRoute>
-      <RoleRoute roles={['LIBRARIAN', 'ADMIN']}>
-        <LibrarianDashboard />
-      </RoleRoute>
-    </ProtectedRoute>);
-  }
-  if (route === 'student' || route === 'user' || (!route && ['STUDENT', 'FACULTY'].includes(user.role))) {
-    return (
-    <ProtectedRoute>
-      <RoleRoute roles={['STUDENT', 'FACULTY']}>
-        <UserDashboard />
-      </RoleRoute>
-    </ProtectedRoute>);
-  }
-  if (route === 'admin' || user.role === 'ADMIN') {
-    return (
-    <ProtectedRoute>
-      <RoleRoute roles={['ADMIN']}>
-        <DepartmentDashboard />
-      </RoleRoute>
-    </ProtectedRoute>);
+  const destination = {
+    DEPARTMENT: 'department',
+    LIBRARIAN: 'librarian',
+    STUDENT: 'student',
+    FACULTY: 'teacher',
+  }[user.role];
+
+  if (!destination) {
+    window.location.hash = '#/login';
+    return <Login />;
   }
 
-  window.location.hash = '#/';
-  return null;
+  if (route !== destination && !(destination === 'student' && route === 'user')) {
+    window.location.hash = `#/${destination}`;
+    return null;
+  }
+
+  const page = destination === 'department' ? <DepartmentDashboard />
+    : destination === 'librarian' ? <LibrarianDashboard />
+      : <UserDashboard />;
+
+  return <ProtectedRoute><RoleRoute roles={[user.role]}>{page}</RoleRoute></ProtectedRoute>;
 }

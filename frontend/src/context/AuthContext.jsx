@@ -1,21 +1,51 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { login as apiLogin } from '../services/authService';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { getCurrentUser, login as apiLogin } from '../services/authService';
 
 const STORAGE_KEY = 'libsphere_session';
 const AuthContext = createContext(null);
 
-function readSession() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); }
-  catch { return null; }
-}
-
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(readSession);
-  const signIn = useCallback(async (email, password) => {
-    const next = await apiLogin(email, password);
+  const [session, setSession] = useState(null);
+  const [ready, setReady] = useState(false);
+  const [restoreError, setRestoreError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    async function restoreSession() {
+      try {
+        const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        if (!cached?.access_token) throw new Error('No saved authentication session');
+        const user = await getCurrentUser(cached.access_token);
+        if (!user?.id || !['STUDENT', 'FACULTY', 'DEPARTMENT', 'LIBRARIAN'].includes(user.role)) {
+          throw new Error('Unsupported or invalid user session');
+        }
+        if (active) setSession({ access_token: cached.access_token, user });
+      } catch (error) {
+        if (error?.isNetworkError || error?.status >= 500) {
+          if (active) setRestoreError(error.message);
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem('libsphere_user');
+        }
+      } finally {
+        if (active) setReady(true);
+      }
+    }
+    restoreSession();
+    return () => { active = false; };
+  }, []);
+
+  const signIn = useCallback(async (credentials) => {
+    const next = await apiLogin(credentials);
+    if (!next?.access_token || !next?.user) {
+      throw new Error('The backend returned an invalid authentication response.');
+    }
+    if (!['STUDENT', 'FACULTY', 'DEPARTMENT', 'LIBRARIAN'].includes(next.user.role)) {
+      throw new Error('This account is not permitted to use the public portal.');
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    localStorage.setItem('libsphere_user', JSON.stringify(next.user));
     setSession(next);
+    setRestoreError('');
     return next;
   }, []);
   const signOut = useCallback(() => {
@@ -24,7 +54,7 @@ export function AuthProvider({ children }) {
     setSession(null);
     window.location.hash = '#/login';
   }, []);
-  const value = useMemo(() => ({ session, user: session?.user || null, token: session?.access_token || null, signIn, signOut }), [session, signIn, signOut]);
+  const value = useMemo(() => ({ session, user: session?.user || null, token: session?.access_token || null, ready, restoreError, signIn, signOut }), [session, ready, restoreError, signIn, signOut]);
   return (
   <AuthContext.Provider value={value}>{children}</AuthContext.Provider>);
 }

@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowDownToLine, ArrowUpFromLine, BookOpen, LayoutDashboard, Lightbulb, LogOut, Plus, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { getLibrarianDashboard } from '../../services/reportService';
 
 const booksSeed = [
   { id: 'BK-001', title: 'Clean Code', author: 'Robert C. Martin', copies: 5 },
@@ -10,10 +11,22 @@ const booksSeed = [
 ];
 
 export default function LibrarianDashboard() {
-  const { user, signOut } = useAuth();
+  const { user, token, signOut } = useAuth();
   const [page, setPage] = useState('dashboard');
   const [query, setQuery] = useState('');
   const [books, setBooks] = useState(booksSeed);
+  const [dashboard, setDashboard] = useState(null);
+  const [dashboardError, setDashboardError] = useState('');
+  useEffect(() => {
+    if (!token) return undefined;
+    let active = true;
+    getLibrarianDashboard(token)
+      .then(data => { if (active) setDashboard(data); })
+      .catch(error => { if (active) setDashboardError(error.message || 'Unable to load library analytics.'); });
+    return () => { active = false; };
+  }, [token]);
+  const summary = dashboard?.summary;
+  const formatCount = value => value == null ? '—' : new Intl.NumberFormat('en-IN').format(value);
   const filtered = useMemo(() => books.filter(book => `${book.id} ${book.title} ${book.author}`.toLowerCase().includes(query.toLowerCase())), [books, query]);
   const nav = [['dashboard', LayoutDashboard, 'Dashboard'], ['catalogue', BookOpen, 'Manage Catalogue'], ['issue', ArrowUpFromLine, 'Issue Book'], ['return', ArrowDownToLine, 'Return Books'], ['suggestions', Lightbulb, 'Suggestions'], ['users', Users, 'Users']];
   return (
@@ -50,14 +63,14 @@ export default function LibrarianDashboard() {
         </header>
         <section className="prototype-content">{page === 'dashboard' && <>
           <h1>Library Control Center</h1>
-          <p className="prototype-muted">Core library operations and activity.</p>
+          <p className="prototype-muted">{dashboardError || (dashboard?.meta?.source ? `Live figures from ${dashboard.meta.source}.` : 'Loading library analytics from the API…')}</p>
           <div className="prototype-stats six">
-            <Stat value="—" label="Total Books" />
-            <Stat value="—" label="Total Copies" />
-            <Stat value="—" label="Available" />
-            <Stat value="—" label="Borrowed" />
-            <Stat value="—" label="Overdue" />
-            <Stat value="—" label="Suggestion Votes" />
+            <Stat value={formatCount(summary?.total_books)} label="Total Books" />
+            <Stat value={formatCount(summary?.total_copies)} label="Total Copies" />
+            <Stat value={formatCount(summary?.available_copies)} label="Available" />
+            <Stat value={formatCount(summary?.borrowed_copies)} label="Borrowed" />
+            <Stat value={formatCount(summary?.overdue_loans)} label="Overdue" />
+            <Stat value={formatCount(summary?.suggestion_votes)} label="Suggestion Votes" />
           </div>
           <Panel title="Quick Actions">
             <div className="prototype-action-grid">
