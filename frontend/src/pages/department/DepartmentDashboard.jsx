@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Bell, BookOpen, CalendarDays, ChartNoAxesCombined, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
+import { Bell, BookOpen, CalendarDays, BarChart, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useDepartmentDashboard } from '../../hooks/useDepartmentDashboard';
 import { BorrowingTrend, CategoryBars, StudentFaculty, CopyStatus, SuggestionBars, Utilization } from '../../components/department/Charts';
@@ -30,7 +30,7 @@ export default function DepartmentDashboard() {
           <a className="nav active"><Layers3 />Dashboard</a>
           <a className="nav"><Search />Book Search</a>
           <a className="nav"><Lightbulb />Suggestions</a>
-          <a className="nav"><ChartNoAxesCombined />Reports</a>
+          <a className="nav"><BarChart />Reports</a>
           <a className="nav"><Bell />Notifications</a>
           <a className="nav"><Users />Profile</a>
         </nav>

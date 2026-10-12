@@ -1,42 +1,124 @@
-import { useMemo, useState } from 'react';
-import { BookOpen, Bell, Lightbulb, LogOut, Search, Table2 } from 'lucide-react';
+import { useMemo, useState, useEffect } from 'react';
+import { BookOpen, Bell, Lightbulb, LogOut, Search, Table2, ArrowUp, Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-
-const catalog = [
-  { title: 'Clean Code', author: 'Robert C. Martin', avail: 3, total: 5, rack: 'CS-A-04' },
-  { title: 'Deep Learning', author: 'Ian Goodfellow, Yoshua Bengio, Aaron Courville', avail: 2, total: 2, rack: 'AI-B-01' },
-  { title: 'Computer Networks', author: 'Andrew S. Tanenbaum, David J. Wetherall', avail: 5, total: 7, rack: 'CS-A-11' },
-  { title: 'Database System Concepts', author: 'Abraham Silberschatz, Henry F. Korth', avail: 4, total: 6, rack: 'CS-C-03' },
-  { title: 'Python Crash Course', author: 'Eric Matthes', avail: 0, total: 3, rack: 'CS-B-02' },
-];
+import { searchBooks, getMyLoans, getMySuggestions, createSuggestion, voteSuggestion, getCategories } from '../../services/api';
 
 export default function UserDashboard() {
   const { user, signOut } = useAuth();
   const [page, setPage] = useState('dashboard');
   const [query, setQuery] = useState('');
   const [suggestion, setSuggestion] = useState('');
-  const [suggestions, setSuggestions] = useState([{ title: 'System Design Interview', votes: 12 }, { title: 'AI for Everyone', votes: 7 }]);
-  const [books, setBooks] = useState([
-    { id: 1, title: 'Clean Code', date: '2026-10-08', status: 'On time', rack: 'CS-A-04' },
-    { id: 2, title: 'Computer Networks', date: '2026-10-03', status: 'Due soon', rack: 'CS-A-11' },
-    { id: 3, title: 'Machine Learning', date: '2026-10-10', status: 'On time', rack: 'AI-A-02' },
-  ]);
-  const filtered = useMemo(() => catalog.filter(book => `${book.title} ${book.author}`.toLowerCase().includes(query.toLowerCase())), [query]);
+  const [suggestions, setSuggestions] = useState([]);
+  const [books, setBooks] = useState([]);
+  const [loans, setLoans] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [searchResults, setSearchResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const firstName = user?.name?.split(' ')[0] || 'Student';
 
-  const nav = [['dashboard', Table2, 'Dashboard'], ['search', Search, 'Search Books'], ['mybooks', BookOpen, 'My Books'], ['suggestions', Lightbulb, 'Suggestions'], ['notifications', Bell, 'Notifications']];
+  // Load initial data
+  useEffect(() => {
+    loadCategories();
+    loadMyLoans();
+    loadMySuggestions();
+  }, []);
+
+  async function loadCategories() {
+    try {
+      const res = await getCategories();
+      setCategories(res.data || []);
+    } catch (e) {
+      console.error('Failed to load categories', e);
+    }
+  }
+
+  async function loadMyLoans() {
+    try {
+      const res = await getMyLoans();
+      setLoans(res.data || []);
+      setBooks(res.data || []);
+    } catch (e) {
+      setError('Failed to load loans');
+    }
+  }
+
+  async function loadMySuggestions() {
+    try {
+      const res = await getMySuggestions();
+      setSuggestions(res.data || []);
+    } catch (e) {
+      setError('Failed to load suggestions');
+    }
+  }
+
+  async function handleSearch() {
+    if (!query.trim()) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await searchBooks({ q: query });
+      setSearchResults(res.data?.items || []);
+    } catch (e) {
+      setError('Search failed: ' + e.message);
+      setSearchResults([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSuggest(e) {
+    e.preventDefault();
+    if (!suggestion.trim() || !user) return;
+    try {
+      await createSuggestion({ title: suggestion.trim(), justification: 'Suggested by student', reason: 'COURSE_REQUIREMENT' });
+      setSuggestion('');
+      await loadMySuggestions();
+    } catch (e) {
+      setError('Failed to submit suggestion: ' + e.message);
+    }
+  }
+
+  async function handleVote(suggestionId) {
+    try {
+      const res = await voteSuggestion(suggestionId);
+      if (res.data?.voted) {
+        setSuggestions(prev => prev.map(s => s.id === suggestionId ? { ...s, votes: s.votes + 1 } : s));
+      } else {
+        setSuggestions(prev => prev.map(s => s.id === suggestionId ? { ...s, votes: s.votes - 1 } : s));
+      }
+    } catch (e) {
+      setError('Vote failed: ' + e.message);
+    }
+  }
+
+  async function handleReturn(loanId) {
+    // For demo purposes - in real app would call return endpoint
+    setLoans(prev => prev.filter(l => l.id !== loanId));
+    setBooks(prev => prev.filter(b => b.id !== loanId));
+  }
+
+  const nav = [
+    ['dashboard', Table2, 'Dashboard'],
+    ['search', Search, 'Search Books'],
+    ['mybooks', BookOpen, 'My Books'],
+    ['suggestions', Lightbulb, 'Suggestions'],
+    ['notifications', Bell, 'Notifications'],
+  ];
+
   return (
     <div className="prototype-shell">
       <aside className="prototype-sidebar">
         <div className="prototype-brand">
-          <b>MITRC
-            <span>LibSphere</span>
-          </b>
+          <b>MITRC <span>LibSphere</span></b>
           <small>Library Management</small>
-        </div>{nav.map(([key, Icon, label]) =>
+        </div>
+        {nav.map(([key, Icon, label]) => (
           <button key={key} className={`prototype-nav ${page === key ? 'active' : ''}`} onClick={() => setPage(key)}>
-            <Icon size={17} />{label}{key === 'mybooks' && <em>{books.length}</em>}
-          </button>)}
+            <Icon size={17} />{label}
+            {key === 'mybooks' && <em>{loans.length}</em>}
+          </button>
+        ))}
         <div className="prototype-divider" />
         <button className="prototype-nav" onClick={signOut}><LogOut size={17} />Logout</button>
         <div className="prototype-user">
@@ -51,114 +133,171 @@ export default function UserDashboard() {
         <header className="prototype-header">
           <div>
             <b>
-              {page === 'dashboard' ? 'Student Dashboard' : page === 'search' ? 'Search Catalogue' : page === 'mybooks' ? 'My Books' : page === 'suggestions' ? 'Community Suggestions' : 'Notifications'}
+              {page === 'dashboard' ? 'Student Dashboard' :
+               page === 'search' ? 'Search Catalogue' :
+               page === 'mybooks' ? 'My Books' :
+               page === 'suggestions' ? 'Community Suggestions' : 'Notifications'}
             </b>
             <small>Personalized library activity</small>
           </div>
           <span>{new Date().toLocaleDateString('en-IN', { dateStyle: 'medium' })}</span>
         </header>
         <section className="prototype-content">
-          {page === 'dashboard' && <>
-            <h1>Good evening, {firstName}</h1>
-            <p className="prototype-muted">Here’s your library activity at a glance.</p>
-            <div className="prototype-stats">
-              <Stat value={books.length} label="Borrowed" />
-              <Stat value="1" label="Due Soon" />
-              <Stat value="0" label="Overdue" />
-              <Stat value="2" label="Reservations" />
-            </div>
-            <div className="prototype-two-col">
-              <Panel title="Currently Borrowed">{books.map(book =>
-                <BookRow key={book.id} book={book} onReturn={() => setBooks(current => current.filter(x => x.id !== book.id))} />)}
-              </Panel>
-              <Panel title="Recommended for you">
-                <div className="prototype-recommend">Hands-On Machine Learning
-                  <small>87% match</small>
-                </div>
-                <div className="prototype-recommend">Database System Concepts
-                  <small>81% match</small>
-                </div>
-              </Panel>
-            </div>
-          </>}
-          {page === 'search' && <>
-            <h1>Discover Books</h1>
-            <div className="prototype-search"><Search size={17} />
-              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search books, authors, ISBN…" /></div>
-            <div className="prototype-book-grid">{filtered.map(book =>
-              <div className="prototype-book-card" key={book.title}>
-                <b>{book.title}</b>
-                <small>{book.author}</small>
-                <span className={book.avail ? 'available' : 'unavailable'}>
-                  {book.avail ? `Available ${book.avail}/${book.total}` : 'Not Available'}
-                </span>
-                <small>{book.rack}</small>
-                <button onClick={() => alert(`Request sent for: ${book.title}`)}>Request Book</button>
-              </div>)}
-            </div>
-          </>}
-          {page === 'mybooks' && <>
-            <h1>My Books</h1>
-            <Panel title="Current Loans">
-              {books.map(book =>
-                <BookRow key={book.id} book={book} onReturn={() => setBooks(current => current.filter(x => x.id !== book.id))} />)
-              }
-            </Panel>
-          </>}
-          {page === 'suggestions' && <>
-            <h1>Suggest a Book 💡</h1>
-            <p className="prototype-muted">Community voted — supported suggestions can be reviewed by the library.</p>
-            <Panel title="Book suggestion">
-              <div className="prototype-suggest">
-                <input value={suggestion} onChange={e => setSuggestion(e.target.value)} placeholder="Enter book title…" />
-                <button onClick={() => { if (!suggestion.trim()) return; setSuggestions([{ title: suggestion.trim(), votes: 1 }, ...suggestions]); setSuggestion(''); }}>Suggest + Vote</button>
+          {error && <div className="notice error">{error}</div>}
+
+          {page === 'dashboard' && (
+            <>
+              <h1>Good evening, {firstName}</h1>
+              <p className="prototype-muted">Here's your library activity at a glance.</p>
+              <div className="prototype-stats">
+                <Stat value={loans.length} label="Borrowed" />
+                <Stat value={loans.filter(l => l.status === 'BORROWED' || l.status === 'OVERDUE').length} label="Active" />
+                <Stat value={loans.filter(l => l.status === 'OVERDUE').length} label="Overdue" />
+                <Stat value={suggestions.length} label="Suggestions" />
               </div>
-              {suggestions.map(item =>
-                <div className="prototype-suggestion-row" key={item.title}>
-                  <span>{item.title}</span>
-                  <b>▲ {item.votes}</b>
-                </div>)
-              }
-            </Panel>
-          </>}
-          {page === 'notifications' && <>
-            <h1>Notifications</h1>
-            <Panel title="Recent notifications">
-              <div className="notice warning">⚠ Computer Networks is due soon.</div>
-              <div className="notice success">✓ Your request for Clean Code was approved.</div>
-            </Panel>
-          </>}
+              <div className="prototype-two-col">
+                <Panel title="Currently Borrowed">
+                  {loans.length === 0 ? (
+                    <p className="prototype-muted">No active loans</p>
+                  ) : (
+                    loans.map(loan => (
+                      <BookRow key={loan.id} loan={loan} onReturn={() => handleReturn(loan.id)} />
+                    ))
+                  )}
+                </Panel>
+                <Panel title="Recommended for You">
+                  <div className="prototype-recommend">
+                    <small>Connect to backend for AI recommendations</small>
+                  </div>
+                </Panel>
+              </div>
+            </>
+          )}
+
+          {page === 'search' && (
+            <>
+              <h1>Discover Books</h1>
+              <div className="prototype-search">
+                <Search size={17} />
+                <input
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                  placeholder="Search books, authors, ISBN…"
+                />
+                <button onClick={handleSearch} disabled={loading}>
+                  {loading ? <Loader2 size={16} className="spin" /> : 'Search'}
+                </button>
+              </div>
+              <div className="prototype-book-grid">
+                {searchResults.map(book => (
+                  <div className="prototype-book-card" key={book.id}>
+                    <b>{book.title}</b>
+                    <small>{book.author}</small>
+                    <span className={book.available > 0 ? 'available' : 'unavailable'}>
+                      {book.available > 0 ? `Available ${book.available}/${book.total}` : 'Not Available'}
+                    </span>
+                    <small>Rack: {book.rack}</small>
+                    <button onClick={() => alert(`Request sent for: ${book.title}`)}>Request Book</button>
+                  </div>
+                ))}
+                {searchResults.length === 0 && query && !loading && (
+                  <p className="prototype-muted">No books found matching "{query}"</p>
+                )}
+              </div>
+            </>
+          )}
+
+          {page === 'mybooks' && (
+            <>
+              <h1>My Books</h1>
+              <Panel title="Current Loans">
+                {loans.length === 0 ? (
+                  <p className="prototype-muted">No books currently borrowed</p>
+                ) : (
+                  loans.map(loan => (
+                    <BookRow key={loan.id} loan={loan} onReturn={() => handleReturn(loan.id)} />
+                  ))
+                )}
+              </Panel>
+            </>
+          )}
+
+          {page === 'suggestions' && (
+            <>
+              <h1>Suggest a Book 💡</h1>
+              <p className="prototype-muted">Community voted — supported suggestions are reviewed by the library.</p>
+              <Panel title="Book suggestion">
+                <form onSubmit={handleSuggest} className="prototype-suggest">
+                  <input
+                    value={suggestion}
+                    onChange={e => setSuggestion(e.target.value)}
+                    placeholder="Enter book title…"
+                    required
+                  />
+                  <button type="submit"><Plus size={16} /> Suggest + Vote</button>
+                </form>
+                {suggestions.map(item => (
+                  <div className="prototype-suggestion-row" key={item.id}>
+                    <span>{item.title}</span>
+                    <button onClick={() => handleVote(item.id)}>
+                      <ArrowUp size={16} /> <b>{item.votes}</b>
+                    </button>
+                  </div>
+                ))}
+                {suggestions.length === 0 && <p className="prototype-muted">No suggestions yet</p>}
+              </Panel>
+            </>
+          )}
+
+          {page === 'notifications' && (
+            <>
+              <h1>Notifications</h1>
+              <Panel title="Recent notifications">
+                <div className="notice warning">⚠ Your books may be due soon</div>
+                <div className="notice success">✓ Request processed</div>
+              </Panel>
+            </>
+          )}
         </section>
       </main>
-    </div>);
+    </div>
+  );
 }
+
 function Stat({ value, label }) {
   return (
     <div className="prototype-stat">
       <b>{value}</b>
       <small>{label}</small>
-    </div>);
+    </div>
+  );
 }
+
 function Panel({ title, children }) {
   return (
     <section className="prototype-panel">
-      <div className="prototype-panel-head">
-        <b>{title}</b>
-      </div>
+      <div className="prototype-panel-head"><b>{title}</b></div>
       <div className="prototype-panel-body">{children}</div>
-    </section>);
+    </section>
+  );
 }
-function BookRow({ book, onReturn }) {
+
+function BookRow({ loan, onReturn }) {
+  const dueDate = new Date(loan.due_at);
+  const isOverdue = loan.status === 'OVERDUE';
+  const isDueSoon = !isOverdue && (dueDate - new Date()) < 3 * 24 * 60 * 60 * 1000;
   return (
     <div className="prototype-book-row">
       <div>
-        <b>{book.title}</b>
-        <small>{book.rack}</small>
+        <b>{loan.book_title}</b>
+        <small>{loan.book_author}</small>
       </div>
-      <span>{book.date}</span>
-      <em className={book.status === 'Due soon' ? 'due' : 'on-time'}>
-        {book.status}
+      <span>{loan.rack} / {loan.shelf}</span>
+      <em className={isOverdue ? 'due' : isDueSoon ? 'due-soon' : 'on-time'}>
+        {isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'On Time'}
       </em>
       <button onClick={onReturn}>Return</button>
-    </div>);
+    </div>
+  );
 }
