@@ -1,19 +1,43 @@
-import { useMemo, useState } from 'react';
-import { Bell, BookOpen, CalendarDays, BarChart, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Bell, BookOpen, BarChart, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useDepartmentDashboard } from '../../hooks/useDepartmentDashboard';
+import CalendarDatePicker from '../../components/department/CalendarDatePicker';
 import { BorrowingTrend, CategoryBars, StudentFaculty, CopyStatus, SuggestionBars, Utilization } from '../../components/department/Charts';
+
+const DEFAULT_START = '2026-04-01';
+const DEFAULT_END = '2026-10-01';
+const TODAY = (() => {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+})();
 
 export default function DepartmentDashboard() {
   const { user, token, signOut } = useAuth();
-  const [start, setStart] = useState('2026-04-01');
-  const [end, setEnd] = useState('2026-10-01');
+  const [start, setStart] = useState(DEFAULT_START);
+  const [end, setEnd] = useState(DEFAULT_END);
   const [category, setCategory] = useState('');
   const [userType, setUserType] = useState('');
   const [suggestionStatus, setSuggestionStatus] = useState('');
   const [search, setSearch] = useState('');
+  const [activeSection, setActiveSection] = useState('dashboard');
+  const dateRangeInvalid = Boolean(start && end && start > end);
+  const navigateTo = (section, targetId) => {
+    setActiveSection(section);
+    document.getElementById(targetId)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+  };
+  const resetFilters = () => {
+    setStart(DEFAULT_START); setEnd(DEFAULT_END); setCategory('');
+    setUserType(''); setSuggestionStatus(''); setSearch('');
+  };
+  const clearDateRange = () => { setStart(''); setEnd(''); };
   const params = useMemo(() => ({ start_date: start, end_date: end, category_id: category, user_type: userType, suggestion_status: suggestionStatus, search }), [start, end, category, userType, suggestionStatus, search]);
   const { data, loading, error, reload } = useDepartmentDashboard(token, params);
+  useEffect(() => {
+    if (activeSection === 'dashboard' || !data) return;
+    const destination = activeSection === 'reports' ? 'department-reports' : 'department-suggestions';
+    document.getElementById(destination)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+  }, [activeSection, data]);
   const s = data?.summary || {};
   const c = data?.comparisons || {};
   const fmt = value => new Intl.NumberFormat('en-IN').format(value ?? 0);
@@ -26,11 +50,11 @@ export default function DepartmentDashboard() {
           </div>
           <div className="brand-sub">Library Management & Discovery Portal</div>
         </div>
-        <nav>
-          <a className="nav active"><Layers3 />Dashboard</a>
+        <nav aria-label="Department dashboard">
+          <button type="button" className={`nav ${activeSection === 'dashboard' ? 'active' : ''}`} aria-current={activeSection === 'dashboard' ? 'page' : undefined} onClick={() => navigateTo('dashboard', 'department-dashboard')}><Layers3 />Dashboard</button>
           <button type="button" className="nav" disabled title="Book Search is not available in this dashboard yet."><Search />Book Search · Unavailable</button>
-          <button type="button" className="nav" disabled title="Suggestions is a read-only dashboard report here."><Lightbulb />Suggestions · Report</button>
-          <button type="button" className="nav" disabled title="Additional report pages are not available yet."><BarChart />Reports · Unavailable</button>
+          <button type="button" className={`nav ${activeSection === 'suggestions' ? 'active' : ''}`} aria-current={activeSection === 'suggestions' ? 'page' : undefined} onClick={() => navigateTo('suggestions', 'department-suggestions')}><Lightbulb />Suggestions</button>
+          <button type="button" className={`nav ${activeSection === 'reports' ? 'active' : ''}`} aria-current={activeSection === 'reports' ? 'page' : undefined} onClick={() => navigateTo('reports', 'department-reports')}><BarChart />Reports</button>
           <button type="button" className="nav" disabled title="Notifications are not available in this dashboard yet."><Bell />Notifications · Unavailable</button>
           <button type="button" className="nav" disabled title="Profile editing is not available yet."><Users />Profile · Unavailable</button>
         </nav>
@@ -63,19 +87,16 @@ export default function DepartmentDashboard() {
             <option value="APPROVED">Approved</option>
             <option value="ORDERED">Ordered</option>
           </select>
-          <button className="filter-btn" onClick={reload}>
+          <button className="filter-btn" onClick={reload} disabled={dateRangeInvalid}>
             <Filter size={16} />Apply Filters
           </button>
-          <button className="filter-btn secondary" onClick={() => {
-            setStart('2026-04-01'); setEnd('2026-10-01'); setCategory('');
-            setUserType(''); setSuggestionStatus(''); setSearch('');
-          }}>
+          <button className="filter-btn secondary" onClick={resetFilters}>
             Reset Filters
           </button>
         </div>
         <div className="sidebar-footer">A smarter library<br />for a brighter tomorrow<br /><br /><b>MITRC</b><br />Modern Institute of Technology and Research Centre<br />Alwar, Rajasthan</div>
       </aside>
-      <main className="main">
+      <main className="main" id="department-dashboard">
         <header className="topbar">
           <button className="mobile-menu" disabled title="Mobile navigation menu is not available yet.">
             <Menu />
@@ -102,29 +123,32 @@ export default function DepartmentDashboard() {
               </div>
             </div>
             <div className="actions">
-              <div className="date-range">
-                <CalendarDays size={16} />
-                <input type="date" value={start} onChange={e => setStart(e.target.value)} />
-                <span>→</span>
-                <input type="date" value={end} onChange={e => setEnd(e.target.value)} />
+              <div className="date-range" aria-label="Report date range">
+                <CalendarDatePicker id="report-start" label="Start date" value={start} minDate="1980-01-01" maxDate={end || TODAY} onChange={setStart} />
+                <span aria-hidden="true">→</span>
+                <CalendarDatePicker id="report-end" label="End date" value={end} minDate={start || '1980-01-01'} maxDate={TODAY} onChange={setEnd} />
+                <button type="button" className="clear-date-range" onClick={clearDateRange} disabled={!start && !end}>Clear dates</button>
               </div>
               <button className="report-btn" onClick={() => window.print()}>
                 <FileDown size={17} />Print Report
               </button>
             </div>
-          </div>{error ?
+          </div>
+          {dateRangeInvalid && <div className="error-banner" role="alert">End date must be the same as or after the start date.</div>}
+          {error ?
             <div className="error-banner">
               <span>{error}</span>
               <button onClick={reload}><RefreshCw size={15} />Retry</button>
             </div> : loading ?
               <div className="loading">Loading department analytics from the API…</div> : data ? <>
-                <div className="kpis">
+                <p className="metric-scope-note">Enabled accounts in {data?.scope?.name || 'this department'}; this is account status, not online activity or borrowing activity.</p>
+                <div className="kpis" id="department-reports">
                   <Card icon={<BookOpen />} title="Department Books" value={fmt(s.department_books)} change={c.department_books_change} tone="blue" />
                   <Card icon={<BookOpen />} title="Available Copies" value={fmt(s.available_copies)} change={c.available_copies_change} tone="green" />
                   <Card icon={<Layers3 />} title="Currently Borrowed" value={fmt(s.currently_borrowed)} change={c.currently_borrowed_change} tone="purple" />
                   <Card icon={<Clock3 />} title="Overdue Books" value={fmt(s.overdue_books)} change={c.overdue_books_change} tone="red" />
-                  <Card icon={<Users />} title="Active Students" value={fmt(s.active_students)} change={c.active_students_change} tone="cyan" />
-                  <Card icon={<Users />} title="Active Faculty" value={fmt(s.active_faculty)} change={c.active_faculty_change} tone="orange" />
+                  <Card icon={<Users />} title="Enabled Students (dept)" value={fmt(s.active_students)} change={c.active_students_change} tone="cyan" />
+                  <Card icon={<Users />} title="Enabled Faculty (dept)" value={fmt(s.active_faculty)} change={c.active_faculty_change} tone="orange" />
                   <Card icon={<Lightbulb />} title="Pending Suggestions" value={fmt(s.pending_suggestions)} change={c.pending_suggestions_change} tone="violet" />
                 </div>
                 <div className="grid-3">
@@ -148,7 +172,7 @@ export default function DepartmentDashboard() {
                   </Panel>
                 </div>
                 <div className="bottom-grid">
-                  <Panel title="Book Suggestions" wide>
+                  <Panel title="Book Suggestions" wide id="department-suggestions">
                     <SuggestionTable rows={data.suggestions?.items || []} />
                   </Panel>
                   <div className="side-stack">
@@ -196,9 +220,9 @@ function Card({ icon, title, value, change, tone }) {
       </div>
     </div>);
 }
-function Panel({ title, children, wide = false }) {
+function Panel({ title, children, wide = false, id }) {
   return (
-    <section className={`panel ${wide ? 'wide' : ''}`}>
+    <section id={id} className={`panel ${wide ? 'wide' : ''}`}>
       <div className="panel-head">
         <h3>{title}</h3>
       </div>

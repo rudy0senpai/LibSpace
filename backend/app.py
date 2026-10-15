@@ -7,7 +7,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 from sqlalchemy.engine import URL
-from sqlalchemy import func, text, case, inspect, String
+from sqlalchemy import func, text, case, inspect, String, or_
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash
@@ -121,7 +121,7 @@ def validate_filters():
             if parsed.strftime("%Y-%m-%d") != end_date:
                 raise ValueError()
 
-        if start_date and end_date and start_date >= end_date:
+        if start_date and end_date and start_date > end_date:
             raise ValueError()
 
     except ValueError:
@@ -184,13 +184,17 @@ def get_department_dashboard_data(department_id, filters):
     suggestion_status = filters.get("suggestion_status")
     search = filters.get("search")
 
-    if not start_date:
-        start_date = datetime.now().replace(day=1).strftime("%Y-%m-%d")
-    if not end_date:
-        end_date = (datetime.now().replace(day=1) + timedelta(days=32)).replace(day=1).strftime("%Y-%m-%d")
-
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-    end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+    today = datetime.now()
+    if start_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    elif end_date:
+        start_dt = datetime(1900, 1, 1)
+    else:
+        start_dt = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if end_date:
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+    else:
+        end_dt = today.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     loan_filter_conditions = [
         Department.id == department_id,
         Loan.issued_at >= start_dt,
@@ -659,6 +663,144 @@ def librarian_dashboard():
     return jsonify({"status": "success", "data": {
         "summary": summary,
         "meta": {"source": f"{db.engine.dialect.name.upper()} Database"},
+    }}), 200
+
+
+@app.route("/api/librarian/users", methods=["GET"])
+@jwt_required()
+def librarian_users():
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {
+            "code": "ACCOUNT_DISABLED", "message": "Active account required."
+        }}), 401
+    if user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
+        return jsonify({"status": "error", "error": {
+            "code": "FORBIDDEN", "message": "Insufficient permissions"
+        }}), 403
+
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 20))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "error": {
+            "code": "INVALID_PAGINATION", "message": "page and per_page must be integers."
+        }}), 422
+    if page < 1 or per_page < 1 or per_page > 100:
+        return jsonify({"status": "error", "error": {
+            "code": "INVALID_PAGINATION", "message": "page must be positive and per_page must be between 1 and 100."
+        }}), 422
+
+    search = (request.args.get("q") or "").strip()
+    if len(search) > 200:
+        return jsonify({"status": "error", "error": {
+            "code": "INVALID_FILTER", "message": "Search is too long."
+        }}), 422
+
+    role_filter = (request.args.get("role") or "").strip().upper()
+    if role_filter:
+        try:
+            role_filter = RoleType(role_filter).value
+        except ValueError:
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_FILTER", "message": "Unknown user role."
+            }}), 422
+
+    department_id = (request.args.get("department_id") or "").strip()
+    if department_id:
+        try:
+            department_id = str(uuid.UUID(department_id))
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_FILTER", "message": "Invalid department ID."
+            }}), 422
+        if not db.session.get(Department, department_id):
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_FILTER", "message": "Unknown department ID."
+            }}), 422
+
+    account_status = (request.args.get("account_status") or "").strip().lower()
+    if account_status not in {"", "enabled", "disabled"}:
+        return jsonify({"status": "error", "error": {
+            "code": "INVALID_FILTER", "message": "account_status must be enabled or disabled."
+        }}), 422
+
+    sort_key = (request.args.get("sort") or "name").strip().lower()
+    sort_columns = {
+        "name": User.name,
+        "user_id": case((User.role == RoleType.STUDENT, User.enrollment_id), else_=User.employee_id),
+        "role": User.role,
+        "department": Department.name,
+        "status": User.is_active,
+        "created_at": User.created_at,
+    }
+    if sort_key not in sort_columns:
+        return jsonify({"status": "error", "error": {
+            "code": "INVALID_SORT", "message": "Unsupported user sort field."
+        }}), 422
+    direction = (request.args.get("direction") or "asc").strip().lower()
+    if direction not in {"asc", "desc"}:
+        return jsonify({"status": "error", "error": {
+            "code": "INVALID_SORT", "message": "direction must be asc or desc."
+        }}), 422
+
+    query = db.session.query(User).outerjoin(Department, User.department_id == Department.id)
+    if role_filter:
+        query = query.filter(User.role == RoleType(role_filter))
+    if department_id:
+        query = query.filter(User.department_id == department_id)
+    if account_status:
+        query = query.filter(User.is_active.is_(account_status == "enabled"))
+    if search:
+        term = f"%{search}%"
+        query = query.filter(or_(
+            User.name.ilike(term), User.enrollment_id.ilike(term), User.employee_id.ilike(term),
+        ))
+    sort_column = sort_columns[sort_key]
+    query = query.order_by(
+        sort_column.desc() if direction == "desc" else sort_column.asc(), User.id.asc()
+    )
+    total = query.count()
+    rows = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    role_summary = {role.value: {"total": 0, "enabled": 0, "disabled": 0} for role in RoleType}
+    for role, enabled, count in db.session.query(User.role, User.is_active, func.count(User.id)).group_by(
+        User.role, User.is_active
+    ).all():
+        bucket = role_summary[role.value]
+        bucket["total"] += count
+        bucket["enabled" if enabled else "disabled"] = count
+    total_accounts = sum(row["total"] for row in role_summary.values())
+    enabled_accounts = sum(row["enabled"] for row in role_summary.values())
+    departments = db.session.query(Department).order_by(Department.name).all()
+
+    items = []
+    for record in rows:
+        identifier = record.enrollment_id if record.role == RoleType.STUDENT else record.employee_id
+        items.append({
+            "name": record.name,
+            "user_id": identifier,
+            "role": record.role.value,
+            "department": ({
+                "id": str(record.department.id), "code": record.department.code,
+                "name": record.department.name,
+            } if record.department else None),
+            "is_active": bool(record.is_active),
+        })
+
+    return jsonify({"status": "success", "data": {
+        "items": items,
+        "pagination": {
+            "page": page, "per_page": per_page, "total": total,
+            "pages": (total + per_page - 1) // per_page,
+        },
+        "summary": {
+            "total_accounts": total_accounts,
+            "enabled_accounts": enabled_accounts,
+            "disabled_accounts": total_accounts - enabled_accounts,
+            "by_role": role_summary,
+        },
+        "departments": [{"id": str(dept.id), "code": dept.code, "name": dept.name} for dept in departments],
     }}), 200
 
 

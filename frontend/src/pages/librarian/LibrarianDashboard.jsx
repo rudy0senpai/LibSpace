@@ -3,6 +3,7 @@ import { ArrowDownToLine, ArrowUpFromLine, BookOpen, LayoutDashboard, Lightbulb,
 import { useAuth } from '../../context/AuthContext';
 import { getLibrarianDashboard } from '../../services/reportService';
 import { getLibrarianLoanRequests, reviewLoanRequest, issueApprovedLoan } from '../../services/api';
+import LibrarianUsers from './LibrarianUsers';
 
 const booksSeed = [
   { id: 'BK-001', title: 'Clean Code', author: 'Robert C. Martin', copies: 5 },
@@ -204,7 +205,7 @@ export default function LibrarianDashboard() {
             </Panel>}
           {page === 'users' &&
             <Panel title="User Management">
-              <p className="prototype-muted">User management is available to authorized librarians/admins. Connect this view to the users API when that endpoint is implemented.</p>
+              <LibrarianUsers token={token} />
             </Panel>}
         </section>
       </main>

@@ -42,6 +42,11 @@ export async function getLibrarianLoanRequests() {
   return fetchWithAuth('/api/librarian/loan-requests');
 }
 
+export async function getLibrarianUsers(params = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== ''));
+  return fetchWithAuth(`/api/librarian/users?${query}`);
+}
+
 export async function reviewLoanRequest(loanId, decision) {
   return fetchWithAuth(`/api/librarian/loan-requests/${loanId}/review`, {
     method: 'POST', body: JSON.stringify({ decision }),

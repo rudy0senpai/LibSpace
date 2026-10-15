@@ -293,6 +293,12 @@ class SQLiteSeedTests(unittest.TestCase):
         self.assertEqual(data["scope"]["id"], str(cse.id))
         self.assertNotEqual(data["scope"]["id"], str(other_department.id))
         self.assertEqual(data["scope"]["name"], "B.Tech - CSE")
+        expected_students = backend.db.session.query(User).filter_by(department_id=cse.id, role=RoleType.STUDENT, is_active=True).count()
+        expected_faculty = backend.db.session.query(User).filter_by(department_id=cse.id, role=RoleType.FACULTY, is_active=True).count()
+        self.assertEqual(expected_students, 12)
+        self.assertEqual(expected_faculty, 5)
+        self.assertEqual(data["summary"]["active_students"], expected_students)
+        self.assertEqual(data["summary"]["active_faculty"], expected_faculty)
         expected_books = backend.db.session.query(Book).join(Book.departments).filter(Department.id == cse.id).count()
         scoped_copies = backend.db.session.query(BookCopy).join(Book).join(Book.departments).filter(Department.id == cse.id)
         self.assertEqual(data["summary"]["department_books"], expected_books)
@@ -350,6 +356,104 @@ class SQLiteSeedTests(unittest.TestCase):
             "Authorization": f"Bearer {student_token}"
         })
         self.assertEqual(forbidden.status_code, 403)
+
+    def test_librarian_user_management_lists_database_records_with_filters_and_totals(self):
+        client = backend.app.test_client()
+        librarian_token = self._login_token("Sphere", "25LIB016", "LIBRARIAN")
+        headers = {"Authorization": f"Bearer {librarian_token}"}
+
+        page = client.get(
+            "/api/librarian/users?role=STUDENT&page=2&per_page=10&sort=name&direction=asc",
+            headers=headers,
+        )
+        self.assertEqual(page.status_code, 200, page.get_json())
+        data = page.get_json()["data"]
+        self.assertEqual(data["pagination"], {"page": 2, "per_page": 10, "total": 100, "pages": 10})
+        self.assertEqual(len(data["items"]), 10)
+        self.assertTrue(all(row["role"] == "STUDENT" and row["is_active"] for row in data["items"]))
+        self.assertNotIn("email", data["items"][0])
+        self.assertNotIn("password_hash", data["items"][0])
+        self.assertNotIn("id", data["items"][0])
+        self.assertNotIn("created_at", data["items"][0])
+        self.assertEqual(data["summary"]["by_role"]["STUDENT"], {"total": 100, "enabled": 100, "disabled": 0})
+        self.assertEqual(data["summary"]["by_role"]["FACULTY"], {"total": 30, "enabled": 30, "disabled": 0})
+        self.assertEqual(data["summary"]["by_role"]["DEPARTMENT"], {"total": 9, "enabled": 9, "disabled": 0})
+        self.assertEqual(data["summary"]["by_role"]["LIBRARIAN"], {"total": 2, "enabled": 2, "disabled": 0})
+        self.assertEqual(data["summary"]["by_role"]["ADMIN"], {"total": 0, "enabled": 0, "disabled": 0})
+        self.assertEqual(data["summary"]["total_accounts"], 141)
+        self.assertEqual(data["summary"]["enabled_accounts"], 141)
+
+        cse = backend.db.session.query(Department).filter_by(code="CSE").one()
+        scoped = client.get(f"/api/librarian/users?role=STUDENT&department_id={cse.id}", headers=headers)
+        self.assertEqual(scoped.status_code, 200, scoped.get_json())
+        self.assertEqual(scoped.get_json()["data"]["pagination"]["total"], 12)
+        found = client.get("/api/librarian/users?q=Student%20Demo%20001", headers=headers)
+        self.assertEqual(found.status_code, 200, found.get_json())
+        self.assertEqual(found.get_json()["data"]["pagination"]["total"], 1)
+        self.assertEqual(found.get_json()["data"]["items"][0]["user_id"], "STD-DEMO-001")
+        disabled = client.get("/api/librarian/users?account_status=disabled", headers=headers)
+        self.assertEqual(disabled.status_code, 200, disabled.get_json())
+        self.assertEqual(disabled.get_json()["data"]["pagination"]["total"], 0)
+        self.assertEqual(disabled.get_json()["data"]["items"], [])
+        invalid = client.get("/api/librarian/users?role=SUPERUSER", headers=headers)
+        self.assertEqual(invalid.status_code, 422)
+        unauthenticated = client.get("/api/librarian/users")
+        self.assertEqual(unauthenticated.status_code, 401)
+
+        student_token = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
+        forbidden = client.get("/api/librarian/users", headers={"Authorization": f"Bearer {student_token}"})
+        self.assertEqual(forbidden.status_code, 403)
+
+    def test_librarian_users_allows_admin_identity_verified_from_database(self):
+        admin = User(
+            name="Temporary API Test Admin", email="temporary-admin@example.test",
+            password_hash="test-only-not-a-login-credential", role=RoleType.ADMIN,
+            employee_id="ADMIN-API-TEST", is_active=True,
+        )
+        backend.db.session.add(admin)
+        backend.db.session.flush()
+        try:
+            token = backend.create_access_token(identity=str(admin.id))
+            response = backend.app.test_client().get(
+                "/api/librarian/users?role=STUDENT",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            totals = response.get_json()["data"]["summary"]
+            self.assertEqual(totals["total_accounts"], 142)
+            self.assertEqual(totals["by_role"]["ADMIN"], {"total": 1, "enabled": 1, "disabled": 0})
+        finally:
+            backend.db.session.delete(admin)
+            backend.db.session.flush()
+
+    def test_department_report_accepts_single_inclusive_day_and_rejects_reversed_range(self):
+        client = backend.app.test_client()
+        department_token = self._login_token("Dhruv", "25DMCAD016", "DEPARTMENT")
+        cse = backend.db.session.query(Department).filter_by(code="CSE").one()
+        student = backend.db.session.query(User).filter_by(enrollment_id="25EMCAD016").one()
+        copy = backend.db.session.query(BookCopy).join(Book).join(Book.departments).filter(
+            Department.id == cse.id, BookCopy.status == CopyStatus.AVAILABLE
+        ).first()
+        issued_at = datetime(2026, 8, 10, 23, 59, 59)
+        backend.db.session.add(Loan(
+            user_id=student.id, book_copy_id=copy.id, issued_at=issued_at,
+            due_at=datetime(2026, 8, 24), returned_at=datetime(2026, 8, 12),
+            status=LoanStatus.RETURNED,
+        ))
+        backend.db.session.flush()
+        response = client.get(
+            f"/api/reports/department/dashboard?start_date=2026-08-10&end_date=2026-08-10&category_id={copy.book.category_id}&user_type=STUDENT",
+            headers={"Authorization": f"Bearer {department_token}"},
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        august = [row for row in response.get_json()["data"]["borrowing_trend"] if row["month"] == "Aug"]
+        self.assertEqual(len(august), 1)
+        self.assertGreaterEqual(august[0]["total_loans"], 1)
+        reversed_range = client.get(
+            "/api/reports/department/dashboard?start_date=2026-08-11&end_date=2026-08-10",
+            headers={"Authorization": f"Bearer {department_token}"},
+        )
+        self.assertEqual(reversed_range.status_code, 422)
 
     def test_seed_contains_required_workflow_entities_and_statuses(self):
         self.assertGreater(backend.db.session.query(BookCopy).count(), 100)
