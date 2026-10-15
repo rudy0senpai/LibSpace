@@ -18,7 +18,17 @@ class Config:
         if not SQLALCHEMY_DATABASE_URI.startswith("sqlite:"):
             raise RuntimeError("APP_ENV=testing requires a SQLite DATABASE_URL; refusing to connect to another database.")
     else:
-        SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
+        configured_database_url = os.getenv("DATABASE_URL", "")
+        if APP_ENV == "production":
+            SQLALCHEMY_DATABASE_URI = configured_database_url or None
+        else:
+            # Local development stays on persistent SQLite even if a stale
+            # PostgreSQL URL exists in a developer's environment.
+            SQLALCHEMY_DATABASE_URI = (
+                configured_database_url
+                if configured_database_url.startswith("sqlite:")
+                else "sqlite:///libsphere.db"
+            )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("JWT_SECRET")

@@ -1,4 +1,5 @@
 import os
+import uuid
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from pathlib import Path
@@ -7,13 +8,14 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from datetime import datetime, timedelta
 from sqlalchemy.engine import URL
 from sqlalchemy import func, text, case, inspect, String
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash
 from werkzeug.exceptions import HTTPException
 
 from config import Config
-from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author
+from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author, Notification, NotificationType, AuditLog
+from identity import canonicalize_name, canonicalize_role, canonicalize_user_id
 
 BACKEND_INSTANCE_DIR = Path(__file__).resolve().parent / "instance"
 BACKEND_INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
@@ -101,11 +103,11 @@ def month_label(value):
 
 
 def validate_filters():
-    start_date = request.args.get("start_date")
-    end_date = request.args.get("end_date")
-    category_id = request.args.get("category_id")
-    user_type = request.args.get("user_type")
-    suggestion_status = request.args.get("suggestion_status")
+    start_date = request.args.get("start_date") or None
+    end_date = request.args.get("end_date") or None
+    category_id = (request.args.get("category_id") or "").strip() or None
+    user_type = (request.args.get("user_type") or "").strip().upper() or None
+    suggestion_status = (request.args.get("suggestion_status") or "").strip().upper() or None
     search = request.args.get("search")
 
     try:
@@ -131,8 +133,13 @@ def validate_filters():
     if suggestion_status and suggestion_status not in SUGGESTION_STATUSES:
         raise ValueError("Invalid suggestion status")
 
-    if category_id is not None and (not category_id or len(category_id) > 100):
-        raise ValueError("Invalid category ID")
+    if category_id:
+        try:
+            category_id = str(uuid.UUID(category_id))
+        except (TypeError, ValueError):
+            raise ValueError("Invalid category ID")
+        if not db.session.get(Category, category_id):
+            raise ValueError("Unknown category ID")
 
     if search:
         search = search.strip()
@@ -151,6 +158,24 @@ def validate_filters():
     }
 
 
+def filter_department_suggestions(query, filters, start_dt, end_dt):
+    query = query.filter(Suggestion.created_at >= start_dt, Suggestion.created_at < end_dt)
+    if filters.get("category_id"):
+        query = query.filter(Suggestion.category_id == filters["category_id"])
+    if filters.get("user_type"):
+        query = query.filter(User.role == RoleType(filters["user_type"]))
+    if filters.get("suggestion_status"):
+        query = query.filter(Suggestion.status == SuggestionStatus(filters["suggestion_status"]))
+    if filters.get("search"):
+        search = filters["search"]
+        query = query.filter(
+            (Suggestion.title.ilike(f"%{search}%")) |
+            (Suggestion.author.ilike(f"%{search}%")) |
+            (User.name.ilike(f"%{search}%"))
+        )
+    return query
+
+
 def get_department_dashboard_data(department_id, filters):
     start_date = filters.get("start_date")
     end_date = filters.get("end_date")
@@ -166,6 +191,16 @@ def get_department_dashboard_data(department_id, filters):
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+    loan_filter_conditions = [
+        Department.id == department_id,
+        Loan.issued_at >= start_dt,
+        Loan.issued_at < end_dt,
+        Loan.status.in_((LoanStatus.BORROWED, LoanStatus.OVERDUE, LoanStatus.RETURNED)),
+    ]
+    if category_id:
+        loan_filter_conditions.append(Book.category_id == category_id)
+    if user_type:
+        loan_filter_conditions.append(User.role == RoleType(user_type))
 
     dept = db.session.get(Department, department_id)
     if not dept:
@@ -176,15 +211,19 @@ def get_department_dashboard_data(department_id, filters):
     charts = {}
     rankings = {}
     suggestions_data = {}
+    copy_filter_conditions = [Department.id == department_id]
+    if category_id:
+        copy_filter_conditions.append(Book.category_id == category_id)
+    user_type_conditions = [User.role == RoleType(user_type)] if user_type else []
 
     dept_books_count = db.session.query(func.count(func.distinct(Book.id))).join(
         Book.departments
-    ).filter(Department.id == department_id).scalar()
+    ).filter(*copy_filter_conditions).scalar()
     kpis["department_books"] = dept_books_count or 0
 
     copy_statuses = db.session.query(BookCopy.status, func.count(BookCopy.id)).join(
         Book, BookCopy.book_id == Book.id
-    ).join(Book.departments).filter(Department.id == department_id).group_by(BookCopy.status).all()
+    ).join(Book.departments).filter(*copy_filter_conditions).group_by(BookCopy.status).all()
 
     status_map = {status.value: count for status, count in copy_statuses}
     kpis["available_copies"] = status_map.get("AVAILABLE", 0)
@@ -194,39 +233,40 @@ def get_department_dashboard_data(department_id, filters):
     overdue_count = db.session.query(func.count(Loan.id)).join(
         BookCopy, Loan.book_copy_id == BookCopy.id
     ).join(Book, BookCopy.book_id == Book.id
-    ).join(Book.departments).filter(
-        Department.id == department_id,
-        Loan.status == LoanStatus.OVERDUE
+    ).join(Book.departments).join(User, Loan.user_id == User.id).filter(
+        *copy_filter_conditions, Loan.status == LoanStatus.OVERDUE,
+        Loan.due_at >= start_dt, Loan.due_at < end_dt, *user_type_conditions,
     ).scalar()
     kpis["overdue_books"] = overdue_count or 0
 
     active_students = db.session.query(func.count(func.distinct(User.id))).filter(
         User.department_id == department_id,
         User.role == RoleType.STUDENT,
-        User.is_active == True
+        User.is_active == True,
+        *user_type_conditions,
     ).scalar()
     kpis["active_students"] = active_students or 0
 
     active_faculty = db.session.query(func.count(func.distinct(User.id))).filter(
         User.department_id == department_id,
         User.role == RoleType.FACULTY,
-        User.is_active == True
+        User.is_active == True,
+        *user_type_conditions,
     ).scalar()
     kpis["active_faculty"] = active_faculty or 0
 
-    pending_suggestions = db.session.query(func.count(Suggestion.id)).join(
+    pending_suggestions_query = db.session.query(Suggestion).join(
         User, Suggestion.submitted_by == User.id
-    ).filter(
-        User.department_id == department_id,
-        Suggestion.status == SuggestionStatus.UNDER_REVIEW
-    ).scalar()
+    ).filter(User.department_id == department_id)
+    pending_suggestions = filter_department_suggestions(
+        pending_suggestions_query, filters, start_dt, end_dt
+    ).filter(Suggestion.status == SuggestionStatus.UNDER_REVIEW).count()
     kpis["pending_suggestions"] = pending_suggestions or 0
 
-    total_votes = db.session.query(func.count(SuggestionVote.suggestion_id)).join(
+    votes_query = db.session.query(SuggestionVote).join(
         Suggestion, SuggestionVote.suggestion_id == Suggestion.id
-    ).join(User, Suggestion.submitted_by == User.id).filter(
-        User.department_id == department_id
-    ).scalar()
+    ).join(User, Suggestion.submitted_by == User.id).filter(User.department_id == department_id)
+    total_votes = filter_department_suggestions(votes_query, filters, start_dt, end_dt).count()
     kpis["suggestion_support"] = total_votes or 0
 
 
@@ -240,11 +280,7 @@ def get_department_dashboard_data(department_id, filters):
         BookCopy, Loan.book_copy_id == BookCopy.id
     ).join(Book, BookCopy.book_id == Book.id).join(
         Book.departments
-    ).filter(
-        Department.id == department_id,
-        Loan.issued_at >= start_dt,
-        Loan.issued_at < end_dt
-    ).group_by('month').order_by('month').all()
+    ).filter(*loan_filter_conditions).group_by('month').order_by('month').all()
 
     charts["monthly_borrowing_trend"] = [
         {"month": month_label(row.month), "total_loans": row.total_loans} for row in monthly_borrowing
@@ -263,11 +299,7 @@ def get_department_dashboard_data(department_id, filters):
         Book.departments
     ).join(
         Category, Book.category_id == Category.id
-    ).filter(
-        Department.id == department_id,
-        Loan.issued_at >= start_dt,
-        Loan.issued_at < end_dt
-    ).group_by(Category.name).order_by(func.count(Loan.id).desc()).all()
+    ).filter(*loan_filter_conditions).group_by(Category.name).order_by(func.count(Loan.id).desc()).all()
 
     charts["borrowing_by_category"] = [
         {"category_name": row.category_name, "borrow_count": row.borrow_count} for row in borrowing_by_category
@@ -281,11 +313,7 @@ def get_department_dashboard_data(department_id, filters):
         BookCopy, Loan.book_copy_id == BookCopy.id
     ).join(Book, BookCopy.book_id == Book.id).join(
         Book.departments
-    ).filter(
-        Department.id == department_id,
-        Loan.issued_at >= start_dt,
-        Loan.issued_at < end_dt
-    ).group_by('month').order_by('month').all()
+    ).filter(*loan_filter_conditions).group_by('month').order_by('month').all()
 
     charts["student_vs_faculty_borrowing"] = [
         {"period": month_label(row.month), "students": row.students, "faculty": row.faculty} for row in student_vs_faculty
@@ -296,11 +324,7 @@ def get_department_dashboard_data(department_id, filters):
         (func.count(Loan.id) * 100.0 / func.nullif(kpis["department_books"], 0)).label('utilization_rate')
     ).join(BookCopy, Loan.book_copy_id == BookCopy.id).join(
         Book, BookCopy.book_id == Book.id
-    ).join(Book.departments).filter(
-        Department.id == department_id,
-        Loan.issued_at >= start_dt,
-        Loan.issued_at < end_dt
-    ).group_by('month').order_by('month').all()
+    ).join(Book.departments).join(User, Loan.user_id == User.id).filter(*loan_filter_conditions).group_by('month').order_by('month').all()
 
     charts["department_book_utilization"] = [
         {"period": month_label(row.month), "utilization_rate": round(float(row.utilization_rate or 0), 1)} for row in utilization
@@ -310,17 +334,16 @@ def get_department_dashboard_data(department_id, filters):
         {"status": status.value if hasattr(status, 'value') else str(status), "count": count} for status, count in copy_statuses
     ]
 
-    suggestion_demand = db.session.query(
+    suggestion_demand_query = db.session.query(
         Category.name.label('category_name'),
         func.count(Suggestion.id).label('suggestion_count')
     ).join(
         User, Suggestion.submitted_by == User.id
     ).outerjoin(
         Category, Suggestion.category_id == Category.id
-    ).filter(
-        User.department_id == department_id,
-        Suggestion.created_at >= start_dt,
-        Suggestion.created_at < end_dt
+    ).filter(User.department_id == department_id)
+    suggestion_demand = filter_department_suggestions(
+        suggestion_demand_query, filters, start_dt, end_dt
     ).group_by(Category.name).order_by(func.count(Suggestion.id).desc()).all()
 
     charts["suggestion_demand_by_category"] = [
@@ -332,11 +355,12 @@ def get_department_dashboard_data(department_id, filters):
         func.count(Loan.id).label('overdue_count')
     ).join(BookCopy, Loan.book_copy_id == BookCopy.id).join(
         Book, BookCopy.book_id == Book.id
-    ).join(Book.departments).filter(
-        Department.id == department_id,
+    ).join(Book.departments).join(User, Loan.user_id == User.id).filter(
+        *copy_filter_conditions,
         Loan.status == LoanStatus.OVERDUE,
         Loan.due_at >= start_dt,
-        Loan.due_at < end_dt
+        Loan.due_at < end_dt,
+        *user_type_conditions,
     ).group_by('month').order_by('month').all()
 
     charts["overdue_trend"] = [
@@ -347,24 +371,21 @@ def get_department_dashboard_data(department_id, filters):
         Book.title, func.count(Loan.id).label('borrow_count')
     ).join(BookCopy, Book.id == BookCopy.book_id).join(
         Loan, BookCopy.id == Loan.book_copy_id
-    ).join(Book.departments).filter(
-        Department.id == department_id,
-        Loan.issued_at >= start_dt,
-        Loan.issued_at < end_dt
-    ).group_by(Book.id, Book.title).order_by(func.count(Loan.id).desc()).limit(5).all()
+    ).join(Book.departments).join(User, Loan.user_id == User.id).filter(*loan_filter_conditions).group_by(Book.id, Book.title).order_by(func.count(Loan.id).desc()).limit(5).all()
 
     rankings["top_borrowed_books"] = [
         {"title": row.title, "author": "", "borrow_count": row.borrow_count} for row in top_borrowed
     ]
 
-    top_suggested = db.session.query(
+    top_suggested_query = db.session.query(
         Suggestion.title,
         func.count(SuggestionVote.suggestion_id).label('vote_count'),
         func.max(Suggestion.created_at).label('created_at')
     ).join(User, Suggestion.submitted_by == User.id).outerjoin(
         SuggestionVote, Suggestion.id == SuggestionVote.suggestion_id
-    ).filter(
-        User.department_id == department_id
+    ).filter(User.department_id == department_id)
+    top_suggested = filter_department_suggestions(
+        top_suggested_query, filters, start_dt, end_dt
     ).group_by(Suggestion.id, Suggestion.title).order_by(
         func.count(SuggestionVote.suggestion_id).desc(), Suggestion.created_at.asc(), Suggestion.title.asc()
     ).limit(5).all()
@@ -373,44 +394,37 @@ def get_department_dashboard_data(department_id, filters):
         {"title": row.title, "vote_count": row.vote_count, "created_at": row.created_at.isoformat() if row.created_at else None} for row in top_suggested
     ]
 
-    student_suggestions = db.session.query(func.count(Suggestion.id)).join(
+    student_suggestions_query = db.session.query(Suggestion).join(
         User, Suggestion.submitted_by == User.id
-    ).filter(
-        User.department_id == department_id,
-        User.role == RoleType.STUDENT
-    ).scalar()
-    faculty_suggestions = db.session.query(func.count(Suggestion.id)).join(
+    ).filter(User.department_id == department_id)
+    student_suggestions = filter_department_suggestions(
+        student_suggestions_query, filters, start_dt, end_dt
+    ).filter(User.role == RoleType.STUDENT).count()
+    faculty_suggestions_query = db.session.query(Suggestion).join(
         User, Suggestion.submitted_by == User.id
-    ).filter(
-        User.department_id == department_id,
-        User.role == RoleType.FACULTY
-    ).scalar()
+    ).filter(User.department_id == department_id)
+    faculty_suggestions = filter_department_suggestions(
+        faculty_suggestions_query, filters, start_dt, end_dt
+    ).filter(User.role == RoleType.FACULTY).count()
 
     suggestions_data["student_vs_faculty"] = {
         "student": student_suggestions or 0,
         "faculty": faculty_suggestions or 0
     }
 
-    status_dist = db.session.query(Suggestion.status, func.count(Suggestion.id)).join(
-        User, Suggestion.submitted_by == User.id
-    ).filter(User.department_id == department_id).group_by(Suggestion.status).all()
+    status_distribution_query = db.session.query(
+        Suggestion.status, func.count(Suggestion.id)
+    ).join(User, Suggestion.submitted_by == User.id).filter(User.department_id == department_id)
+    status_dist = filter_department_suggestions(
+        status_distribution_query, filters, start_dt, end_dt
+    ).group_by(Suggestion.status).all()
 
     suggestions_data["status_distribution"] = {status.value: count for status, count in status_dist}
 
     suggestions_query = db.session.query(Suggestion).join(
         User, Suggestion.submitted_by == User.id
     ).filter(User.department_id == department_id)
-
-    if suggestion_status:
-        suggestions_query = suggestions_query.filter(Suggestion.status == SuggestionStatus(suggestion_status))
-
-    if search:
-        suggestions_query = suggestions_query.filter(
-            (Suggestion.title.ilike(f"%{search}%")) |
-            (Suggestion.author.ilike(f"%{search}%")) |
-            (User.name.ilike(f"%{search}%"))
-        )
-
+    suggestions_query = filter_department_suggestions(suggestions_query, filters, start_dt, end_dt)
     suggestions_query = suggestions_query.order_by(Suggestion.created_at.desc()).limit(20)
 
     suggestions_list = []
@@ -433,11 +447,12 @@ def get_department_dashboard_data(department_id, filters):
 
     suggestions_data["items"] = suggestions_list
 
-    recent_suggestions = db.session.query(Suggestion).join(
+    recent_suggestions_query = db.session.query(Suggestion).join(
         User, Suggestion.submitted_by == User.id
-    ).filter(User.department_id == department_id).order_by(
-        Suggestion.created_at.desc()
-    ).limit(5).all()
+    ).filter(User.department_id == department_id)
+    recent_suggestions = filter_department_suggestions(
+        recent_suggestions_query, filters, start_dt, end_dt
+    ).order_by(Suggestion.created_at.desc()).limit(5).all()
 
     recent_list = []
     for s in recent_suggestions:
@@ -452,8 +467,15 @@ def get_department_dashboard_data(department_id, filters):
             "votes": vote_count or 0
         })
 
+    department_categories = db.session.query(Category.id, Category.name).join(
+        Book, Category.id == Book.category_id
+    ).join(Book.departments).filter(
+        Department.id == department_id
+    ).distinct().order_by(Category.name).all()
+
     return {
         "scope": {"id": str(dept.id), "name": dept.name},
+        "categories": [{"category_id": str(category_id), "category_name": name} for category_id, name in department_categories],
         "summary": kpis,
         "comparisons": comparisons,
         "charts": charts,
@@ -514,32 +536,27 @@ def login():
         return jsonify({"status": "error", "error": {"code": "INVALID_REQUEST", "message": "Request body required"}}), 400
 
     if app.config.get("APP_ENV") == "testing":
-        name = str(data.get("name", "")).strip()
-        user_id = str(data.get("user_id", "")).strip()
-        requested_role = str(data.get("role", "")).strip().upper()
-        if requested_role == "TEACHER":
-            requested_role = "FACULTY"
-        demo_profiles = {
-            ("Urvashi", "25EMCAD016", "STUDENT"),
-            ("Yashdeep", "25TECAD016", "FACULTY"),
-            ("Dhruv", "25DMCAD016", "DEPARTMENT"),
-            ("Sphere", "25LIB016", "LIBRARIAN"),
-        }
-        if (name, user_id, requested_role) not in demo_profiles:
+        name_key = canonicalize_name(data.get("name"))
+        user_id_key = canonicalize_user_id(data.get("user_id"))
+        requested_role = canonicalize_role(data.get("role"))
+        public_roles = {"STUDENT", "FACULTY", "DEPARTMENT", "LIBRARIAN"}
+        if not name_key or not user_id_key or requested_role not in public_roles:
             return jsonify({"status": "error", "error": {
-                "code": "INVALID_IDENTITY", "message": "Name, user ID, and role did not match a permitted local testing profile."
+                "code": "INVALID_IDENTITY", "message": "Name, user ID, and a valid testing role are required."
             }}), 401
         role = RoleType(requested_role)
         identifier_field = User.enrollment_id if role == RoleType.STUDENT else User.employee_id
-        user = db.session.query(User).filter(
-            User.name == name,
-            identifier_field == user_id,
+        candidates = db.session.query(User).filter(
             User.role == role,
             User.is_active.is_(True),
-        ).first()
+            User.email.like("%@libsphere.test"),
+        ).all()
+        user = next((candidate for candidate in candidates
+                     if canonicalize_name(candidate.name) == name_key
+                     and canonicalize_user_id(getattr(candidate, identifier_field.key)) == user_id_key), None)
         if not user:
             return jsonify({"status": "error", "error": {
-                "code": "INVALID_IDENTITY", "message": "The local testing profile is not present in the active database."
+                "code": "INVALID_IDENTITY", "message": "Name, user ID, and role did not match an active local testing account."
             }}), 401
     else:
         email = str(data.get("email", "")).strip()
@@ -577,11 +594,10 @@ def login():
 @jwt_required()
 def department_dashboard():
     try:
-        current_user_id = get_jwt_identity()
-        user = db.session.get(User, current_user_id)
+        user = authenticated_active_user()
 
         if not user:
-            return jsonify({"status": "error", "error": {"code": "USER_NOT_FOUND", "message": "User not found"}}), 404
+            return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
 
         if user.role not in [RoleType.DEPARTMENT, RoleType.ADMIN, RoleType.LIBRARIAN]:
             return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Insufficient permissions"}}), 403
@@ -616,11 +632,11 @@ def department_dashboard():
 @app.route("/api/reports/librarian/dashboard", methods=["GET"])
 @jwt_required()
 def librarian_dashboard():
-    user = db.session.get(User, get_jwt_identity())
+    user = authenticated_active_user()
     if not user:
         return jsonify({"status": "error", "error": {
-            "code": "USER_NOT_FOUND", "message": "User not found"
-        }}), 404
+            "code": "ACCOUNT_DISABLED", "message": "Active account required."
+        }}), 401
     if user.role != RoleType.LIBRARIAN:
         return jsonify({"status": "error", "error": {
             "code": "FORBIDDEN", "message": "Insufficient permissions"
@@ -674,41 +690,60 @@ def me():
 @jwt_required()
 def search_books():
     try:
+        user = authenticated_active_user()
+        if not user:
+            return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
         query = request.args.get("q", "").strip()
-        print(f"DEBUG: Search query: {query}")
-        category_id = request.args.get("category_id")
-        page = int(request.args.get("page", 1))
-        per_page = int(request.args.get("per_page", 20))
+        category_id = (request.args.get("category_id") or "").strip()
+        availability = request.args.get("availability", "").strip().lower()
+        try:
+            page = int(request.args.get("page", 1))
+            per_page = int(request.args.get("per_page", 20))
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page and per_page must be integers."}}), 400
+        if page < 1 or per_page < 1 or per_page > 100:
+            return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page must be positive and per_page must be between 1 and 100."}}), 400
+        if availability not in {"", "available", "unavailable"}:
+            return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "availability must be available or unavailable."}}), 400
+        if category_id:
+            try:
+                category_id = str(uuid.UUID(category_id))
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "category_id is invalid."}}), 400
+            if db.session.get(Category, category_id) is None:
+                return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "category_id is invalid."}}), 400
 
         q = db.session.query(Book).join(Book.category).join(Book.departments)
-
         if query:
             q = q.filter(
                 (Book.title.ilike(f"%{query}%")) |
                 (Book.authors.any(Author.name.ilike(f"%{query}%"))) |
                 (Book.isbn.ilike(f"%{query}%"))
             )
-        print(f"DEBUG: Query: {q}")
         if category_id:
             q = q.filter(Book.category_id == category_id)
+        if availability == "available":
+            q = q.filter(Book.copies.any(BookCopy.status == CopyStatus.AVAILABLE))
+        elif availability == "unavailable":
+            q = q.filter(~Book.copies.any(BookCopy.status == CopyStatus.AVAILABLE))
 
+        q = q.distinct().order_by(Book.title.asc(), Book.id.asc())
         total = q.count()
         books = q.offset((page - 1) * per_page).limit(per_page).all()
 
         results = []
         for book in books:
-            copies = db.session.query(BookCopy).filter(BookCopy.book_id == book.id).all()
-            avail = sum(1 for c in copies if c.status == CopyStatus.AVAILABLE)
-            total_copies = len(copies)
+            copies = db.session.query(BookCopy).filter(BookCopy.book_id == book.id).order_by(BookCopy.id).all()
+            avail = sum(1 for copy in copies if copy.status == CopyStatus.AVAILABLE)
             results.append({
                 "id": str(book.id),
                 "title": book.title,
-                "author": ", ".join([a.name for a in book.authors]) or "",
+                "author": ", ".join(author.name for author in book.authors) or "",
                 "isbn": book.isbn,
                 "category": book.category.name if book.category else "",
                 "available": avail,
-                "total": total_copies,
-                "rack": copies[0].rack if copies else ""
+                "total": len(copies),
+                "rack": copies[0].rack if copies else "",
             })
 
         return jsonify({
@@ -717,72 +752,267 @@ def search_books():
                 "items": results,
                 "total": total,
                 "page": page,
-                "per_page": per_page
-            }
+                "per_page": per_page,
+            },
         }), 200
-    except Exception as e:
+    except Exception:
+        db.session.rollback()
         app.logger.exception("Book search failed")
-        return jsonify({"status": "error", "error": {"code": "SEARCH_FAILED", "message": str(e)}}), 500
+        return jsonify({"status": "error", "error": {"code": "SEARCH_FAILED", "message": "Unable to search the catalogue."}}), 500
+
+
+def serialize_loan_record(loan):
+    issued = loan.status in {LoanStatus.BORROWED, LoanStatus.OVERDUE, LoanStatus.RETURNED}
+    book = loan.book_copy.book
+    return {
+        "id": str(loan.id),
+        "book_id": str(book.id),
+        "book_title": book.title,
+        "book_author": ", ".join(author.name for author in book.authors) or "",
+        "requester_id": str(loan.user_id),
+        "requester_name": loan.user.name,
+        "requester_role": loan.user.role.value,
+        "request_submitted_at": loan.created_at.isoformat() if loan.created_at else None,
+        "issued_at": loan.issued_at.isoformat() if issued and loan.issued_at else None,
+        "due_at": loan.due_at.isoformat() if issued and loan.due_at else None,
+        "returned_at": loan.returned_at.isoformat() if loan.returned_at else None,
+        "status": loan.status.value,
+        "decision": loan.status.value if loan.status in {LoanStatus.APPROVED, LoanStatus.REJECTED} else None,
+        "rack": loan.book_copy.rack,
+        "shelf": loan.book_copy.shelf,
+    }
+
+
+def authenticated_active_user():
+    user = db.session.get(User, get_jwt_identity())
+    return user if user and user.is_active else None
+
+
+def add_loan_notification(user, title, message):
+    db.session.add(Notification(
+        user_id=user.id, type=NotificationType.SYSTEM, title=title, message=message,
+    ))
+
+
+def audit_loan_event(actor, action, loan):
+    db.session.add(AuditLog(
+        actor_user_id=actor.id, action=action, entity_type="loan", entity_id=loan.id,
+        details={"loan_status": loan.status.value, "book_copy_id": str(loan.book_copy_id)},
+    ))
 
 
 @app.route("/api/users/me/loans", methods=["GET"])
 @jwt_required()
 def my_loans():
     try:
-        current_user_id = get_jwt_identity()
-        loans = db.session.query(Loan).filter(Loan.user_id == current_user_id).order_by(Loan.issued_at.desc()).all()
-
-        results = []
-        for loan in loans:
-            book = loan.book_copy.book
-            results.append({
-                "id": str(loan.id),
-                "book_title": book.title,
-                "book_author": ", ".join([a.name for a in book.authors]) or "",
-                "issued_at": loan.issued_at.isoformat(),
-                "due_at": loan.due_at.isoformat(),
-                "returned_at": loan.returned_at.isoformat() if loan.returned_at else None,
-                "status": loan.status.value,
-                "rack": loan.book_copy.rack,
-                "shelf": loan.book_copy.shelf
-            })
-
-        return jsonify({
-            "status": "success",
-            "data": results
-        }), 200
-    except Exception as e:
+        user = authenticated_active_user()
+        if not user:
+            return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+        loans = db.session.query(Loan).filter(Loan.user_id == user.id).order_by(Loan.created_at.desc()).all()
+        return jsonify({"status": "success", "data": [serialize_loan_record(loan) for loan in loans]}), 200
+    except Exception:
+        db.session.rollback()
         app.logger.exception("My loans failed")
-        return jsonify({"status": "error", "error": {"code": "LOANS_FAILED", "message": str(e)}}), 500
+        return jsonify({"status": "error", "error": {"code": "LOANS_FAILED", "message": "Unable to load your borrowing history."}}), 500
+
+
+@app.route("/api/users/me/loans/requests", methods=["POST"])
+@jwt_required()
+def request_book_loan():
+    try:
+        user = authenticated_active_user()
+        if not user:
+            return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+        if user.role not in {RoleType.STUDENT, RoleType.FACULTY}:
+            return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Only students and faculty may request books."}}), 403
+        payload = request.get_json(silent=True)
+        book_id = payload.get("book_id") if isinstance(payload, dict) else None
+        if not isinstance(book_id, str) or not book_id.strip():
+            return jsonify({"status": "error", "error": {"code": "INVALID_INPUT", "message": "book_id is required."}}), 400
+        book = db.session.get(Book, book_id)
+        if not book:
+            return jsonify({"status": "error", "error": {"code": "BOOK_NOT_FOUND", "message": "Book was not found."}}), 404
+
+        active_statuses = (LoanStatus.REQUESTED, LoanStatus.APPROVED, LoanStatus.BORROWED, LoanStatus.OVERDUE)
+        duplicate = db.session.query(Loan).join(BookCopy).filter(
+            Loan.user_id == user.id, BookCopy.book_id == book.id, Loan.status.in_(active_statuses)
+        ).first()
+        if duplicate:
+            return jsonify({"status": "error", "error": {"code": "DUPLICATE_REQUEST", "message": "You already have an active request or loan for this book."}}), 409
+
+        copy = db.session.query(BookCopy).filter(
+            BookCopy.book_id == book.id, BookCopy.status == CopyStatus.AVAILABLE
+        ).order_by(BookCopy.accession_number).with_for_update().first()
+        if not copy:
+            return jsonify({"status": "error", "error": {"code": "NO_COPY_AVAILABLE", "message": "No available copy can be requested right now."}}), 409
+        now = datetime.now()
+        copy.status = CopyStatus.RESERVED
+        loan = Loan(
+            user_id=user.id, book_copy_id=copy.id, issued_at=now,
+            due_at=now + timedelta(days=14), status=LoanStatus.REQUESTED,
+        )
+        db.session.add(loan)
+        try:
+            db.session.flush()
+        except SQLAlchemyError:
+            db.session.rollback()
+            return jsonify({"status": "error", "error": {"code": "COPY_CONFLICT", "message": "That copy was just requested. Refresh availability and retry."}}), 409
+        for librarian in db.session.query(User).filter(
+            User.role == RoleType.LIBRARIAN, User.is_active.is_(True)
+        ).all():
+            add_loan_notification(librarian, "New borrowing request", f"{user.name} requested {book.title}.")
+        audit_loan_event(user, "LOAN_REQUESTED", loan)
+        db.session.commit()
+        db.session.refresh(loan)
+        return jsonify({"status": "success", "data": serialize_loan_record(loan)}), 201
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Book request failed")
+        return jsonify({"status": "error", "error": {"code": "REQUEST_FAILED", "message": "Unable to submit the borrowing request."}}), 500
+
+
+@app.route("/api/librarian/loan-requests", methods=["GET"])
+@jwt_required()
+def librarian_loan_requests():
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    if user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
+        return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Librarian access required."}}), 403
+    try:
+        pending = db.session.query(Loan).filter(Loan.status.in_((LoanStatus.REQUESTED, LoanStatus.APPROVED))).order_by(Loan.created_at.asc()).all()
+        return jsonify({"status": "success", "data": [serialize_loan_record(loan) for loan in pending]}), 200
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Librarian request queue failed")
+        return jsonify({"status": "error", "error": {"code": "REQUEST_QUEUE_FAILED", "message": "Unable to load borrowing requests."}}), 500
+
+
+@app.route("/api/librarian/loan-requests/<loan_id>/review", methods=["POST"])
+@jwt_required()
+def review_loan_request(loan_id):
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    if user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
+        return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Librarian access required."}}), 403
+    payload = request.get_json(silent=True)
+    decision = str(payload.get("decision", "")).strip().upper() if isinstance(payload, dict) else ""
+    if decision not in {"APPROVED", "REJECTED"}:
+        return jsonify({"status": "error", "error": {"code": "INVALID_DECISION", "message": "decision must be APPROVED or REJECTED."}}), 400
+    try:
+        loan = db.session.get(Loan, loan_id)
+        if not loan:
+            return jsonify({"status": "error", "error": {"code": "LOAN_NOT_FOUND", "message": "Request was not found."}}), 404
+        if loan.status != LoanStatus.REQUESTED:
+            return jsonify({"status": "error", "error": {"code": "INVALID_STATE", "message": "Only pending requests can be reviewed."}}), 409
+        loan.status = LoanStatus(decision)
+        loan.issued_by = user.id
+        if loan.status == LoanStatus.REJECTED:
+            loan.book_copy.status = CopyStatus.AVAILABLE
+        add_loan_notification(
+            loan.user, "Borrowing request updated",
+            f"Your request for {loan.book_copy.book.title} was {decision.casefold()}.",
+        )
+        audit_loan_event(user, f"LOAN_{decision}", loan)
+        db.session.commit()
+        db.session.refresh(loan)
+        return jsonify({"status": "success", "data": serialize_loan_record(loan)}), 200
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Borrowing request review failed")
+        return jsonify({"status": "error", "error": {"code": "REVIEW_FAILED", "message": "Unable to review this request."}}), 500
+
+
+@app.route("/api/librarian/loan-requests/<loan_id>/issue", methods=["POST"])
+@jwt_required()
+def issue_approved_loan(loan_id):
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    if user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
+        return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Librarian access required."}}), 403
+    try:
+        loan = db.session.get(Loan, loan_id)
+        if not loan:
+            return jsonify({"status": "error", "error": {"code": "LOAN_NOT_FOUND", "message": "Request was not found."}}), 404
+        if loan.status != LoanStatus.APPROVED or loan.book_copy.status != CopyStatus.RESERVED:
+            return jsonify({"status": "error", "error": {"code": "INVALID_STATE", "message": "Only an approved request with a reserved copy can be issued."}}), 409
+        loan.status = LoanStatus.BORROWED
+        loan.issued_at = datetime.now()
+        loan.due_at = loan.issued_at + timedelta(days=14)
+        loan.issued_by = user.id
+        loan.book_copy.status = CopyStatus.BORROWED
+        add_loan_notification(loan.user, "Book issued", f"{loan.book_copy.book.title} is issued; due {loan.due_at.date().isoformat()}.")
+        audit_loan_event(user, "LOAN_ISSUED", loan)
+        db.session.commit()
+        db.session.refresh(loan)
+        return jsonify({"status": "success", "data": serialize_loan_record(loan)}), 200
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Loan issue failed")
+        return jsonify({"status": "error", "error": {"code": "ISSUE_FAILED", "message": "Unable to issue this loan."}}), 500
+
+
+@app.route("/api/users/me/loans/<loan_id>/cancel", methods=["POST"])
+@jwt_required()
+def cancel_loan_request(loan_id):
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    try:
+        loan = db.session.get(Loan, loan_id)
+        if not loan or loan.user_id != user.id:
+            return jsonify({"status": "error", "error": {"code": "LOAN_NOT_FOUND", "message": "Request was not found."}}), 404
+        if loan.status not in {LoanStatus.REQUESTED, LoanStatus.APPROVED}:
+            return jsonify({"status": "error", "error": {"code": "INVALID_STATE", "message": "This request can no longer be cancelled."}}), 409
+        loan.status = LoanStatus.CANCELLED
+        loan.book_copy.status = CopyStatus.AVAILABLE
+        audit_loan_event(user, "LOAN_CANCELLED", loan)
+        db.session.commit()
+        db.session.refresh(loan)
+        return jsonify({"status": "success", "data": serialize_loan_record(loan)}), 200
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Loan cancellation failed")
+        return jsonify({"status": "error", "error": {"code": "CANCEL_FAILED", "message": "Unable to cancel this request."}}), 500
 
 
 @app.route("/api/users/me/suggestions", methods=["GET"])
 @jwt_required()
 def my_suggestions():
     try:
-        current_user_id = get_jwt_identity()
-        suggestions = db.session.query(Suggestion).filter(Suggestion.submitted_by == current_user_id).order_by(Suggestion.created_at.desc()).all()
+        user = authenticated_active_user()
+        if not user:
+            return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+        suggestions = db.session.query(Suggestion).order_by(Suggestion.created_at.desc(), Suggestion.id.asc()).all()
 
         results = []
-        for s in suggestions:
-            vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(SuggestionVote.suggestion_id == s.id).scalar()
+        for suggestion in suggestions:
+            vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
+                SuggestionVote.suggestion_id == suggestion.id
+            ).scalar() or 0
+            voted_by_me = db.session.query(SuggestionVote.suggestion_id).filter(
+                SuggestionVote.suggestion_id == suggestion.id,
+                SuggestionVote.user_id == user.id,
+            ).first() is not None
             results.append({
-                "id": str(s.id),
-                "title": s.title,
-                "author": s.author or "",
-                "reason": s.reason.value,
-                "status": s.status.value,
-                "votes": vote_count or 0,
-                "created_at": s.created_at.isoformat()
+                "id": str(suggestion.id),
+                "title": suggestion.title,
+                "author": suggestion.author or "",
+                "reason": suggestion.reason.value,
+                "status": suggestion.status.value,
+                "votes": vote_count,
+                "voted_by_me": voted_by_me,
+                "is_own": suggestion.submitted_by == user.id,
+                "created_at": suggestion.created_at.isoformat(),
             })
 
-        return jsonify({
-            "status": "success",
-            "data": results
-        }), 200
-    except Exception as e:
+        return jsonify({"status": "success", "data": results}), 200
+    except Exception:
+        db.session.rollback()
         app.logger.exception("My suggestions failed")
-        return jsonify({"status": "error", "error": {"code": "SUGGESTIONS_FAILED", "message": str(e)}}), 500
+        return jsonify({"status": "error", "error": {"code": "SUGGESTIONS_FAILED", "message": "Unable to load suggestions."}}), 500
 
 
 @app.route("/api/suggestions", methods=["POST"])
@@ -826,30 +1056,41 @@ def create_suggestion():
 @jwt_required()
 def vote_suggestion(suggestion_id):
     try:
-        current_user_id = get_jwt_identity()
+        user = authenticated_active_user()
+        if not user:
+            return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
         suggestion = db.session.get(Suggestion, suggestion_id)
         if not suggestion:
-            return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Suggestion not found"}}), 404
+            return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Suggestion not found."}}), 404
 
         existing = db.session.query(SuggestionVote).filter(
-            SuggestionVote.suggestion_id == suggestion_id,
-            SuggestionVote.user_id == current_user_id
+            SuggestionVote.suggestion_id == suggestion.id,
+            SuggestionVote.user_id == user.id,
         ).first()
-
         if existing:
-            db.session.delete(existing)
+            vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
+                SuggestionVote.suggestion_id == suggestion.id
+            ).scalar() or 0
+            return jsonify({"status": "success", "data": {"voted": True, "vote_count": vote_count}}), 200
+
+        db.session.add(SuggestionVote(suggestion_id=suggestion.id, user_id=user.id))
+        try:
             db.session.commit()
-            return jsonify({"status": "success", "data": {"voted": False}}), 200
+        except IntegrityError:
+            db.session.rollback()
+            vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
+                SuggestionVote.suggestion_id == suggestion.id
+            ).scalar() or 0
+            return jsonify({"status": "success", "data": {"voted": True, "vote_count": vote_count}}), 200
 
-        vote = SuggestionVote(suggestion_id=suggestion_id, user_id=current_user_id)
-        db.session.add(vote)
-        db.session.commit()
-
-        return jsonify({"status": "success", "data": {"voted": True}}), 200
-    except Exception as e:
+        vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
+            SuggestionVote.suggestion_id == suggestion.id
+        ).scalar() or 0
+        return jsonify({"status": "success", "data": {"voted": True, "vote_count": vote_count}}), 200
+    except Exception:
         db.session.rollback()
         app.logger.exception("Vote failed")
-        return jsonify({"status": "error", "error": {"code": "VOTE_FAILED", "message": str(e)}}), 500
+        return jsonify({"status": "error", "error": {"code": "VOTE_FAILED", "message": "Unable to submit this vote."}}), 500
 
 
 @app.route("/api/categories", methods=["GET"])

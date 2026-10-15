@@ -5,7 +5,7 @@
 
 **Discover • Borrow • Suggest • Learn**
 
-A Library Management & Discovery Portal for the Modern Institute of Technology and Research Centre (MITRC), Alwar, Rajasthan. Built as a college internal hackathon project.
+A prototype Library Management & Discovery Portal for the Modern Institute of Technology and Research Centre (MITRC), Alwar, Rajasthan. Built as a college internal hackathon project.
 
 > **Status: Prototype implementation in progress.** The React/Vite frontend talks to the Flask API. Use the isolated SQLite seed database for local testing; PostgreSQL remains the intended deployment database and has not been verified locally.
 
@@ -26,8 +26,8 @@ Students and faculty struggle to discover books, know whether copies are availab
 A web portal where users search the catalogue, see live availability and rack/shelf location, request/borrow/reserve books, receive in-app notifications, suggest new books and vote on suggestions; and where librarians manage inventory, loans, suggestions, reports and audit logs.
 
 ## 4. Features
-- **MVP:** authentication, role-based dashboards, catalogue, search/filter/sort, availability, physical copies, borrow/return, suggestions, voting, librarian dashboard, in-app notifications.
-- **Strong enhancements:** reservations, waiting list, fines, analytics, audit logs.
+- **Implemented prototype workflows:** local testing login, role-specific dashboards, paginated/filterable catalogue search, student/faculty borrowing requests, librarian review/approval/issue, requested-books status, suggestion voting, and department analytics filters.
+- **Seeded domain models/data:** departments, users, books, copies, workflow history, votes, notifications, fines, and audit events. Reservations, returns, fines, and audit entries do not all have complete interactive workflows.
 - **Future scope:** AI recommendations, natural-language search, email notifications, library map, PWA/mobile, college SSO.
 
 ## 5. User Roles
@@ -38,7 +38,7 @@ A web portal where users search the catalogue, see live availability and rack/sh
 |---|---|
 | Frontend | React, JavaScript (not TypeScript), Vite, Tailwind CSS |
 | Backend | Flask, Python |
-| Database | SQLite for local testing; PostgreSQL for future deployment |
+| Database | SQLite for local development and testing; PostgreSQL support remains future deployment scope |
 | Containers | Docker Compose (planned; must not delay core work) |
 
 ## 7. Architecture
@@ -61,7 +61,7 @@ Only these directories plus `.env.example`, `.gitignore`, `docker-compose.yml` a
 
 ## Local SQLite testing (Windows PowerShell)
 
-SQLite is a local testing option only. The database file is `backend/instance/libsphere_test.db`; Flask resolves the relative SQLite URL beneath its instance directory. The seed command explicitly selects SQLite and ignores `DATABASE_URL` from `.env`, so it will not connect to PostgreSQL. Seeding is repeatable and does not reset data unless `--reset` is explicitly supplied.
+SQLite is the sole database used by the current local development and testing workflow. Persistent testing data is stored in `backend/instance/libsphere_test.db`; the local-development default is `backend/instance/libsphere.db`. Flask resolves relative SQLite URLs beneath its instance directory. The test seeder explicitly selects SQLite and rejects non-SQLite URLs. Seeding is repeatable and does not reset data unless `--reset` is explicitly supplied.
 
 1. From the repository root, create the backend virtual environment if needed and install dependencies:
 
@@ -94,7 +94,7 @@ SQLite is a local testing option only. The database file is `backend/instance/li
    Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
    $env:APP_ENV = 'testing'
    $env:DATABASE_URL = 'sqlite:///libsphere_test.db'
-   $env:CORS_ORIGINS = 'http://localhost:5174,http://127.0.0.1:5174'
+   $env:CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
    $env:JWT_SECRET_KEY = ([guid]::NewGuid().ToString() + [guid]::NewGuid().ToString())
    & $python .\backend\app.py
    ```
@@ -107,7 +107,7 @@ SQLite is a local testing option only. The database file is `backend/instance/li
    .\scripts\run_frontend.ps1
    ```
 
-5. Open `http://127.0.0.1:5174` and check `http://127.0.0.1:5001/api/health`. Demo identities (no passwords; valid only while the backend has `APP_ENV=testing`):
+5. Open `http://127.0.0.1:5173` and check `http://127.0.0.1:5001/api/health`. Demo identities (no passwords; valid only while the backend has `APP_ENV=testing`):
 
    | Name | User ID | Role |
    |---|---|---|
@@ -118,24 +118,41 @@ SQLite is a local testing option only. The database file is `backend/instance/li
 
    This is deliberately passwordless test authentication, not identity verification. The frontend shows this three-field form only when `VITE_AUTH_MODE=testing`; otherwise it displays no login fields. The backend accepts the seeded profiles only while `APP_ENV=testing`. Existing production API authentication remains unchanged and does not accept this passwordless flow.
 
-The data catalog contains 119 distinct titles. Each catalog item has an Open Library work reference; ISBN, edition and other optional metadata are omitted where an edition-level fact was not verified. The seed creates authors, categories, verified known publisher links, departments, 238 copies, workflow records, votes, notifications, fines and audit events. Dashboard figures are calculated from those database rows.
+The catalog seed contains 119 distinct titles (at least the requested 100), with Open Library work references; ISBN, edition, publisher, and other metadata are included only where the source record supported them. It creates the required **141 testing accounts**: 100 students, 30 faculty, 9 department accounts, and 2 librarians. All demo accounts are testing profiles, not verified MITRC personnel. The seed also creates 238 copies and related workflow records. The automated tests verify role counts, department associations, catalog distinctness, and seed idempotence against SQLite; they do not constitute a live persistent-file/browser E2E run.
+
+### Department testing accounts
+
+| Department | User ID |
+|---|---|
+| B.Tech - CSE | `25DMCAD016` (Dhruv) |
+| B.Tech - AI&DS | `DEPT-AIDS` |
+| B.Tech - AI&ML | `DEPT-AIML` |
+| B.Tech - Mechanical | `DEPT-MECH` |
+| B.Tech - Electrical | `DEPT-ELEC` |
+| B.Tech - Civil | `DEPT-CIVIL` |
+| BBA | `DEPT-BBA` |
+| BCA | `DEPT-BCA` |
+| M.Tech | `DEPT-MTECH` |
+
+The exact testing profile accounts required by the brief are included within those totals. Names/IDs are case-insensitive at login; surrounding whitespace is trimmed, while internal ID whitespace and punctuation are preserved and therefore do not match a canonical ID.
 
 ## PostgreSQL deployment configuration (future)
 
 PostgreSQL remains the intended deployment database. Set `APP_ENV=production`, configure `DATABASE_URL` with the deployment PostgreSQL URI, and provide a unique secret `JWT_SECRET_KEY` outside the repository. Never point a testing command at a production URL. The legacy `database/schema/schema.sql` setup can drop/recreate tables; run it only on a disposable local PostgreSQL database after reviewing it, never on shared or production data. PostgreSQL connectivity has not been verified in this local environment.
 
-The backend uses Flask on `http://127.0.0.1:5001`; Vite uses `http://127.0.0.1:5174` for the local testing launcher. The frontend only talks to the Flask API, never to either database. `VITE_API_URL` selects the API base URL. `npm run build` builds the frontend from `frontend/`.
+The backend uses Flask on `http://127.0.0.1:5001`; Vite uses `http://127.0.0.1:5173` for the local testing launcher. The frontend only talks to the Flask API, never to either database. `VITE_API_URL` selects the API base URL. `npm run build` builds the frontend from `frontend/`.
 
 ## Testing
 
 Run the backend suite from the repository root:
 
 ```powershell
+Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
 $python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
 & $python -m unittest discover -s tests -v
 ```
 
-The tests use an in-memory SQLite database; the separate seed command above initializes the persistent local test file. The API health endpoint reports success only when the configured database is reachable and the required tables exist.
+The backend tests use an isolated SQLite test database; the separate seed command above initializes the persistent local test file. Run `npm run verify:virtual-grid` from `frontend/` for a repeatable initial-render measurement: the current component produced 15 visible/overscan cards from 1,000 inputs (1.5%) in its server-rendered initial window. This is not a browser scrolling or runtime performance profile. The API health endpoint reports success only when the configured database is reachable and the required tables exist.
 
 
 ## 14. Demo

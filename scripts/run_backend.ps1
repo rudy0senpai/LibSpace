@@ -13,7 +13,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Backend dependency installation failed.' }
 # prevent a repository .env PostgreSQL URL from being used by accident.
 $env:APP_ENV = 'testing'
 $env:DATABASE_URL = 'sqlite:///libsphere_test.db'
-$env:CORS_ORIGINS = 'http://localhost:5174,http://127.0.0.1:5174'
+$env:CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
 $env:JWT_SECRET_KEY = [guid]::NewGuid().ToString() + [guid]::NewGuid().ToString()
 
 & $python (Join-Path $repoRoot 'backend\seed_test_db.py')

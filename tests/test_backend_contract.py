@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -25,6 +26,9 @@ class FakeQuery:
 
     def first(self):
         return self.user
+
+    def all(self):
+        return [self.user] if self.user is not None else []
 
 
 class AuthApiContractTests(unittest.TestCase):
@@ -186,6 +190,21 @@ class AuthApiContractTests(unittest.TestCase):
         response = self.client.get("/api/reports/department/dashboard")
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json()["error"]["code"], "MISSING_AUTHORIZATION")
+
+
+class LocalDatabaseConfigurationTests(unittest.TestCase):
+    def test_development_defaults_to_sqlite_without_postgres_env(self):
+        env = os.environ.copy()
+        env.pop("DATABASE_URL", None)
+        env.pop("TEST_DATABASE_URL", None)
+        env.pop("PYTHONPATH", None)
+        env["APP_ENV"] = "development"
+        result = subprocess.run(
+            [sys.executable, "-c", "from config import Config; print(Config.SQLALCHEMY_DATABASE_URI)"],
+            cwd=Path(__file__).resolve().parents[1] / "backend",
+            env=env, capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "sqlite:///libsphere.db")
 
 
 if __name__ == "__main__":

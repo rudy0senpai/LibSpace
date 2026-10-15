@@ -1,7 +1,9 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
 import { BookOpen, Bell, Lightbulb, LogOut, Search, Table2, ArrowUp, Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { searchBooks, getMyLoans, getMySuggestions, createSuggestion, voteSuggestion, getCategories } from '../../services/api';
+import { searchBooks, getMyLoans, getMySuggestions, createSuggestion, voteSuggestion, getCategories, requestBook, cancelMyLoan } from '../../services/api';
+import RequestedBooks from './RequestedBooks';
+import VirtualBookGrid from './VirtualBookGrid';
 
 export default function UserDashboard() {
   const { user, signOut } = useAuth();
@@ -15,6 +17,17 @@ export default function UserDashboard() {
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [loansLoading, setLoansLoading] = useState(true);
+  const [loanError, setLoanError] = useState('');
+  const [requestingBookId, setRequestingBookId] = useState('');
+  const [cancellingId, setCancellingId] = useState('');
+  const [votingIds, setVotingIds] = useState(() => new Set());
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [availabilityFilter, setAvailabilityFilter] = useState('');
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const searchSequence = useRef(0);
+  const activeBookIds = useMemo(() => new Set(loans.filter(loan => ['REQUESTED', 'APPROVED', 'BORROWED', 'OVERDUE'].includes(loan.status)).map(loan => loan.book_id)), [loans]);
   const firstName = user?.name?.split(' ')[0] || 'Student';
 
   // Load initial data
@@ -34,12 +47,16 @@ export default function UserDashboard() {
   }
 
   async function loadMyLoans() {
+    setLoansLoading(true);
+    setLoanError('');
     try {
       const res = await getMyLoans();
       setLoans(res.data || []);
       setBooks(res.data || []);
     } catch (e) {
-      setError('Failed to load loans');
+      setLoanError(e.message || 'Failed to load your requested books.');
+    } finally {
+      setLoansLoading(false);
     }
   }
 
@@ -52,18 +69,28 @@ export default function UserDashboard() {
     }
   }
 
-  async function handleSearch() {
-    if (!query.trim()) return;
+  async function handleSearch(append = false) {
+    const pageToLoad = append ? searchPage + 1 : 1;
+    const sequence = ++searchSequence.current;
     setLoading(true);
     setError('');
     try {
-      const res = await searchBooks({ q: query });
-      setSearchResults(res.data?.items || []);
+      const res = await searchBooks({
+        q: query, page: pageToLoad, per_page: 24,
+        category_id: categoryFilter || undefined,
+        availability: availabilityFilter || undefined,
+      });
+      if (sequence !== searchSequence.current) return;
+      const items = res.data?.items || [];
+      setSearchResults(current => append ? [...current, ...items] : items);
+      setSearchPage(pageToLoad);
+      setSearchTotal(res.data?.total || 0);
     } catch (e) {
+      if (sequence !== searchSequence.current) return;
       setError('Search failed: ' + e.message);
-      setSearchResults([]);
+      if (!append) setSearchResults([]);
     } finally {
-      setLoading(false);
+      if (sequence === searchSequence.current) setLoading(false);
     }
   }
 
@@ -71,7 +98,8 @@ export default function UserDashboard() {
     e.preventDefault();
     if (!suggestion.trim() || !user) return;
     try {
-      await createSuggestion({ title: suggestion.trim(), justification: `Suggested by ${user?.role === 'FACULTY' ? 'faculty' : 'student'}`, reason: 'COURSE_REQUIREMENT' });
+      const created = await createSuggestion({ title: suggestion.trim(), justification: `Suggested by ${user?.role === 'FACULTY' ? 'faculty' : 'student'}`, reason: 'COURSE_REQUIREMENT' });
+      if (created.data?.id) await voteSuggestion(created.data.id);
       setSuggestion('');
       await loadMySuggestions();
     } catch (e) {
@@ -80,22 +108,53 @@ export default function UserDashboard() {
   }
 
   async function handleVote(suggestionId) {
+    const current = suggestions.find(item => item.id === suggestionId);
+    if (!current || current.voted_by_me || votingIds.has(suggestionId)) return;
+    setVotingIds(previous => new Set(previous).add(suggestionId));
+    setSuggestions(previous => previous.map(item => item.id === suggestionId
+      ? { ...item, votes: item.votes + 1, voted_by_me: true }
+      : item));
     try {
-      const res = await voteSuggestion(suggestionId);
-      if (res.data?.voted) {
-        setSuggestions(prev => prev.map(s => s.id === suggestionId ? { ...s, votes: s.votes + 1 } : s));
-      } else {
-        setSuggestions(prev => prev.map(s => s.id === suggestionId ? { ...s, votes: s.votes - 1 } : s));
-      }
+      const result = await voteSuggestion(suggestionId);
+      setSuggestions(previous => previous.map(item => item.id === suggestionId
+        ? { ...item, votes: result.data.vote_count, voted_by_me: result.data.voted }
+        : item));
     } catch (e) {
+      await loadMySuggestions();
       setError('Vote failed: ' + e.message);
+    } finally {
+      setVotingIds(previous => {
+        const next = new Set(previous);
+        next.delete(suggestionId);
+        return next;
+      });
     }
   }
 
-  async function handleReturn(loanId) {
-    // For demo purposes - in real app would call return endpoint
-    setLoans(prev => prev.filter(l => l.id !== loanId));
-    setBooks(prev => prev.filter(b => b.id !== loanId));
+  async function handleBookRequest(book) {
+    setRequestingBookId(book.id);
+    setError('');
+    try {
+      await requestBook(String(book.id));
+      await loadMyLoans();
+    } catch (e) {
+      setError(e.message || 'Unable to submit the borrowing request.');
+    } finally {
+      setRequestingBookId('');
+    }
+  }
+
+  async function handleCancel(loanId) {
+    setCancellingId(loanId);
+    setLoanError('');
+    try {
+      await cancelMyLoan(loanId);
+      await loadMyLoans();
+    } catch (e) {
+      setLoanError(e.message || 'Unable to cancel this request.');
+    } finally {
+      setCancellingId('');
+    }
   }
 
   const nav = [
@@ -150,27 +209,28 @@ export default function UserDashboard() {
               <h1>Good evening, {firstName}</h1>
               <p className="prototype-muted">Here's your library activity at a glance.</p>
               <div className="prototype-stats">
-                <Stat value={loans.length} label="Borrowed" />
-                <Stat value={loans.filter(l => l.status === 'BORROWED' || l.status === 'OVERDUE').length} label="Active" />
+                <Stat value={loans.filter(l => l.status === 'REQUESTED' || l.status === 'APPROVED').length} label="Requests" />
+                <Stat value={loans.filter(l => l.status === 'BORROWED' || l.status === 'OVERDUE').length} label="Active loans" />
                 <Stat value={loans.filter(l => l.status === 'OVERDUE').length} label="Overdue" />
                 <Stat value={suggestions.length} label="Suggestions" />
               </div>
               <div className="prototype-two-col">
                 <Panel title="Currently Borrowed">
-                  {loans.length === 0 ? (
-                    <p className="prototype-muted">No active loans</p>
+                  {loans.filter(loan => loan.status === 'BORROWED' || loan.status === 'OVERDUE').length === 0 ? (
+                    <p className="prototype-muted">No books currently borrowed</p>
                   ) : (
-                    loans.map(loan => (
-                      <BookRow key={loan.id} loan={loan} onReturn={() => handleReturn(loan.id)} />
+                    loans.filter(loan => loan.status === 'BORROWED' || loan.status === 'OVERDUE').map(loan => (
+                      <BookRow key={loan.id} loan={loan} />
                     ))
                   )}
                 </Panel>
                 <Panel title="Recommended for You">
                   <div className="prototype-recommend">
-                    <small>Connect to backend for AI recommendations</small>
+                    <small>Recommendations are not available yet.</small>
                   </div>
                 </Panel>
               </div>
+              <RequestedBooks loans={loans} loading={loansLoading} error={loanError} onRetry={loadMyLoans} onCancel={handleCancel} cancellingId={cancellingId} />
             </>
           )}
 
@@ -184,39 +244,55 @@ export default function UserDashboard() {
                   onChange={e => setQuery(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleSearch()}
                   placeholder="Search books, authors, ISBN…"
+                  aria-label="Search books, authors or ISBN"
                 />
-                <button onClick={handleSearch} disabled={loading}>
+                <select aria-label="Filter by category" value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
+                  <option value="">All categories</option>
+                  {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+                <select aria-label="Filter by availability" value={availabilityFilter} onChange={e => setAvailabilityFilter(e.target.value)}>
+                  <option value="">Any availability</option>
+                  <option value="available">Available now</option>
+                  <option value="unavailable">Unavailable</option>
+                </select>
+                <button onClick={() => handleSearch(false)} disabled={loading}>
                   {loading ? <Loader2 size={16} className="spin" /> : 'Search'}
                 </button>
               </div>
-              <div className="prototype-book-grid">
-                {searchResults.map(book => (
-                  <div className="prototype-book-card" key={book.id}>
-                    <b>{book.title}</b>
-                    <small>{book.author}</small>
-                    <span className={book.available > 0 ? 'available' : 'unavailable'}>
-                      {book.available > 0 ? `Available ${book.available}/${book.total}` : 'Not Available'}
-                    </span>
-                    <small>Rack: {book.rack}</small>
-                    <button onClick={() => alert(`Request sent for: ${book.title}`)}>Request Book</button>
-                  </div>
-                ))}
-                {searchResults.length === 0 && query && !loading && (
-                  <p className="prototype-muted">No books found matching "{query}"</p>
-                )}
-              </div>
+              {error && <div className="notice error" role="alert">{error}</div>}
+              {searchResults.length > 0 && <p className="prototype-muted">Showing {searchResults.length} of {searchTotal} matching books.</p>}
+              {searchResults.length > 0 && <VirtualBookGrid items={searchResults} renderItem={(book, index, total) => (
+                <div className="prototype-book-card" role="listitem" aria-posinset={index + 1} aria-setsize={total} key={book.id}>
+                  <b>{book.title}</b>
+                  <small>{book.author}</small>
+                  <span className={book.available > 0 ? 'available' : 'unavailable'}>
+                    {book.available > 0 ? `Available ${book.available}/${book.total}` : 'Not Available'}
+                  </span>
+                  <small>Rack: {book.rack}</small>
+                  <button disabled={requestingBookId === book.id || activeBookIds.has(String(book.id)) || book.available <= 0} onClick={() => handleBookRequest(book)}>
+                    {requestingBookId === book.id ? 'Submitting…' : activeBookIds.has(String(book.id)) ? 'Already requested' : book.available <= 0 ? 'Unavailable' : 'Request Book'}
+                  </button>
+                </div>
+              )} />}
+              {searchResults.length === 0 && !loading && (
+                <p className="prototype-muted">{searchTotal ? 'No books on this page.' : 'Search the catalogue to see matching books.'}</p>
+              )}
+              {searchResults.length < searchTotal && <button type="button" onClick={() => handleSearch(true)} disabled={loading}>
+                {loading ? 'Loading…' : 'Load more books'}
+              </button>}
             </>
           )}
 
           {page === 'mybooks' && (
             <>
               <h1>My Books</h1>
-              <Panel title="Current Loans">
-                {loans.length === 0 ? (
+              <RequestedBooks loans={loans} loading={loansLoading} error={loanError} onRetry={loadMyLoans} onCancel={handleCancel} cancellingId={cancellingId} />
+              <Panel title="Currently Borrowed">
+                {loans.filter(loan => loan.status === 'BORROWED' || loan.status === 'OVERDUE').length === 0 ? (
                   <p className="prototype-muted">No books currently borrowed</p>
                 ) : (
-                  loans.map(loan => (
-                    <BookRow key={loan.id} loan={loan} onReturn={() => handleReturn(loan.id)} />
+                  loans.filter(loan => loan.status === 'BORROWED' || loan.status === 'OVERDUE').map(loan => (
+                    <BookRow key={loan.id} loan={loan} />
                   ))
                 )}
               </Panel>
@@ -240,8 +316,15 @@ export default function UserDashboard() {
                 {suggestions.map(item => (
                   <div className="prototype-suggestion-row" key={item.id}>
                     <span>{item.title}</span>
-                    <button onClick={() => handleVote(item.id)}>
-                      <ArrowUp size={16} /> <b>{item.votes}</b>
+                    <button
+                      type="button"
+                      className={item.voted_by_me ? 'suggestion-vote voted' : 'suggestion-vote'}
+                      aria-pressed={item.voted_by_me}
+                      disabled={item.voted_by_me || votingIds.has(item.id)}
+                      onClick={() => handleVote(item.id)}
+                    >
+                      {votingIds.has(item.id) ? <Loader2 size={16} className="spin" /> : <ArrowUp size={16} />}
+                      <b>{item.voted_by_me ? 'Voted' : 'Vote'} · {item.votes}</b>
                     </button>
                   </div>
                 ))}
@@ -283,10 +366,10 @@ function Panel({ title, children }) {
   );
 }
 
-function BookRow({ loan, onReturn }) {
-  const dueDate = new Date(loan.due_at);
+function BookRow({ loan }) {
+  const dueDate = loan.due_at ? new Date(loan.due_at) : null;
   const isOverdue = loan.status === 'OVERDUE';
-  const isDueSoon = !isOverdue && (dueDate - new Date()) < 3 * 24 * 60 * 60 * 1000;
+  const isDueSoon = dueDate && !isOverdue && (dueDate - new Date()) < 3 * 24 * 60 * 60 * 1000;
   return (
     <div className="prototype-book-row">
       <div>
@@ -295,9 +378,8 @@ function BookRow({ loan, onReturn }) {
       </div>
       <span>{loan.rack} / {loan.shelf}</span>
       <em className={isOverdue ? 'due' : isDueSoon ? 'due-soon' : 'on-time'}>
-        {isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'On Time'}
+        {isOverdue ? 'Overdue' : dueDate ? isDueSoon ? 'Due Soon' : 'On Time' : loan.status}
       </em>
-      <button onClick={onReturn}>Return</button>
     </div>
   );
 }

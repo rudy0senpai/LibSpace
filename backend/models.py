@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import Column, String, Text, Integer, Boolean, Date, DateTime, ForeignKey, Enum, CheckConstraint, UniqueConstraint, func, Index, JSON, Table, event
+from sqlalchemy import Column, String, Text, Integer, Boolean, Date, DateTime, ForeignKey, Enum, CheckConstraint, UniqueConstraint, func, Index, JSON, Table, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -95,6 +95,7 @@ class LoanStatus(enum.Enum):
     LOST = "LOST"
     DAMAGED = "DAMAGED"
     CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
 
 
 class ReservationStatus(enum.Enum):
@@ -298,6 +299,11 @@ class Loan(db.Model):
         Index("idx_loans_user_issued", "user_id", "issued_at"),
         Index("idx_loans_copy_status", "book_copy_id", "status"),
         Index("idx_loans_due_status", "due_at", "status"),
+        Index(
+            "uq_loans_one_active_request_per_copy", "book_copy_id", unique=True,
+            sqlite_where=text("status IN ('REQUESTED','APPROVED','BORROWED','OVERDUE')"),
+            postgresql_where=text("status IN ('REQUESTED','APPROVED','BORROWED','OVERDUE')"),
+        ),
     )
 
 

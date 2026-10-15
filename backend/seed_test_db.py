@@ -38,8 +38,10 @@ else:
     args = argparse.Namespace(reset=False)
 
 sys.path.insert(0, str(BACKEND_DIR))
+from sqlalchemy import text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 from app import app, db  # noqa: E402
+from identity import canonicalize_user_id  # noqa: E402
 from models import (  # noqa: E402
     AuditLog, Author, Book, BookCopy, Category, CopyStatus, Department, Fine, FineStatus,
     Loan, LoanStatus, Notification, NotificationType, Publisher, Reservation,
@@ -82,14 +84,25 @@ PROFILES = [
      "email": "sphere@libsphere.test", "department": None, "identifier": "employee_id"},
 ]
 DEPARTMENTS = [
-    ("CSE", "Computer Science & Engineering", "CSE"),
-    ("AIDS", "Artificial Intelligence & Data Science", "AI&DS"),
+    ("CSE", "B.Tech - CSE", "CSE"),
+    ("AIDS", "B.Tech - AI&DS", "AI&DS"),
+    ("AIML", "B.Tech - AI&ML", "AI&ML"),
+    ("ME", "B.Tech - Mechanical", "Mechanical"),
+    ("EE", "B.Tech - Electrical", "Electrical"),
+    ("CE", "B.Tech - Civil", "Civil"),
+    ("BBA", "BBA", "BBA"),
+    ("BCA", "BCA", "BCA"),
+    ("MTECH", "M.Tech", "M.Tech"),
+]
+LEGACY_DEPARTMENTS = [
     ("ECE", "Electronics & Communication Engineering", "ECE"),
-    ("ME", "Mechanical Engineering", "ME"),
-    ("CE", "Civil Engineering", "Civil"),
-    ("EE", "Electrical Engineering", "EE"),
     ("MBA", "Master of Business Administration", "MBA"),
 ]
+DEPARTMENT_ACCOUNT_IDS = {
+    "CSE": "25DMCAD016", "AIDS": "DEPT-AIDS", "AIML": "DEPT-AIML",
+    "ME": "DEPT-MECH", "EE": "DEPT-ELEC", "CE": "DEPT-CIVIL",
+    "BBA": "DEPT-BBA", "BCA": "DEPT-BCA", "MTECH": "DEPT-MTECH",
+}
 PUBLISHERS = [
     "Addison-Wesley", "Cambridge University Press", "Cengage", "Dorset House",
     "Farrar, Straus and Giroux", "Harper Business", "HarperCollins", "Harvard Business Review Press",
@@ -137,6 +150,67 @@ def stable_id(key: str) -> uuid.UUID:
     return uuid.uuid5(NAMESPACE, key)
 
 
+def build_testing_profiles():
+    """Return the full deterministic test cohort, including four fixed identities."""
+    profiles = [dict(profile) for profile in PROFILES]
+    department_codes = [code for code, _name, _short in DEPARTMENTS]
+
+    for number in range(1, 100):
+        department = department_codes[(number - 1) % len(department_codes)]
+        profiles.append({
+            "name": f"Student Demo {number:03d}", "user_id": f"STD-DEMO-{number:03d}",
+            "role": RoleType.STUDENT, "email": f"student.demo.{number:03d}@libsphere.test",
+            "department": department, "identifier": "enrollment_id",
+        })
+    for number in range(1, 30):
+        department = department_codes[(number - 1) % len(department_codes)]
+        profiles.append({
+            "name": f"Faculty Demo {number:03d}", "user_id": f"FAC-DEMO-{number:03d}",
+            "role": RoleType.FACULTY, "email": f"faculty.demo.{number:03d}@libsphere.test",
+            "department": department, "identifier": "employee_id",
+        })
+    for code, identifier in DEPARTMENT_ACCOUNT_IDS.items():
+        if code == "CSE":  # Dhruv is the CSE department test account, not an extra user.
+            continue
+        profiles.append({
+            "name": f"Department Demo {code}", "user_id": identifier,
+            "role": RoleType.DEPARTMENT, "email": f"department.{code.casefold()}@libsphere.test",
+            "department": code, "identifier": "employee_id",
+        })
+    profiles.append({
+        "name": "Librarian Demo 002", "user_id": "LIB-DEMO-002",
+        "role": RoleType.LIBRARIAN, "email": "librarian.demo.002@libsphere.test",
+        "department": None, "identifier": "employee_id",
+    })
+    return profiles
+
+
+def validate_unique_seed_user_ids(profiles):
+    seen = {}
+    for profile in profiles:
+        canonical = canonicalize_user_id(profile["user_id"])
+        if not canonical:
+            raise ValueError(f"Testing user {profile['name']!r} has an empty user ID.")
+        if canonical in seen:
+            raise ValueError(
+                f"Duplicate canonical testing user ID {profile['user_id']!r} "
+                f"for {seen[canonical]!r} and {profile['name']!r}."
+            )
+        seen[canonical] = profile["name"]
+
+
+def validate_seeded_database_user_ids():
+    seen = {}
+    for user in db.session.query(User).filter(User.email.like("%@libsphere.test")).all():
+        identifier = user.enrollment_id if user.role == RoleType.STUDENT else user.employee_id
+        canonical = canonicalize_user_id(identifier)
+        if not canonical:
+            raise ValueError(f"Testing account {user.name!r} has no role-appropriate user ID.")
+        if canonical in seen and seen[canonical] != user.id:
+            raise ValueError(f"Canonical testing user ID collision for {identifier!r}.")
+        seen[canonical] = user.id
+
+
 def by_name(model, name):
     return db.session.query(model).filter(db.func.lower(model.name) == name.casefold()).first()
 
@@ -146,9 +220,14 @@ def seed_all():
         if app.config.get("APP_ENV") != "testing" or db.engine.dialect.name != "sqlite":
             raise RuntimeError("Refusing to seed outside the SQLite testing environment.")
         db.create_all()
+        db.session.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_loans_one_active_request_per_copy "
+            "ON loans(book_copy_id) WHERE status IN ('REQUESTED','APPROVED','BORROWED','OVERDUE')"
+        ))
         catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))["books"]
+        validate_unique_seed_user_ids(build_testing_profiles())
         departments = {}
-        for code, name, short_name in DEPARTMENTS:
+        for code, name, short_name in [*DEPARTMENTS, *LEGACY_DEPARTMENTS]:
             department = db.session.query(Department).filter_by(code=code).first()
             if department is None:
                 department = Department(code=code, name=name, short_name=short_name)
@@ -174,7 +253,8 @@ def seed_all():
         db.session.flush()
 
         users = {}
-        for profile in PROFILES:
+        test_profiles = build_testing_profiles()
+        for profile in test_profiles:
             user = db.session.query(User).filter_by(email=profile["email"]).first()
             if user is None:
                 user = User(
@@ -188,8 +268,9 @@ def seed_all():
             user.department = departments.get(profile["department"])
             setattr(user, profile["identifier"], profile["user_id"])
             user.is_active = True
-            users[profile["role"]] = user
+            users.setdefault(profile["role"], user)
         db.session.flush()
+        validate_seeded_database_user_ids()
 
         librarian = users[RoleType.LIBRARIAN]
         for record in catalog:
@@ -220,11 +301,11 @@ def seed_all():
             book.authors[:] = desired_authors
             related_departments = {"CSE"}
             if record["category"] == "AI and Machine Learning":
-                related_departments.add("AIDS")
+                related_departments.update({"AIDS", "AIML"})
             elif record["category"] in {"Networks", "Computer Architecture", "Cybersecurity"}:
-                related_departments.add("ECE")
+                related_departments.add("AIML")
             elif record["category"] == "Management":
-                related_departments.add("MBA")
+                related_departments.add("BBA")
             for code in related_departments:
                 if departments[code] not in book.departments:
                     book.departments.append(departments[code])
@@ -350,6 +431,11 @@ def seed_all():
             "database": str(db_file) if db_file else "in-memory SQLite",
             "books": db.session.query(Book).count(),
             "profiles": db.session.query(User).filter(User.email.like("%@libsphere.test")).count(),
+            "user_counts": {
+                role.value: db.session.query(User).filter_by(role=role).count()
+                for role in (RoleType.STUDENT, RoleType.FACULTY, RoleType.DEPARTMENT, RoleType.LIBRARIAN)
+            },
+            "departments": db.session.query(Department).count(),
             "copies": db.session.query(BookCopy).count(),
             "loans": db.session.query(Loan).count(),
         }

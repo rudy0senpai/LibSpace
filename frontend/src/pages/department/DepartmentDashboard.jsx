@@ -28,11 +28,11 @@ export default function DepartmentDashboard() {
         </div>
         <nav>
           <a className="nav active"><Layers3 />Dashboard</a>
-          <a className="nav"><Search />Book Search</a>
-          <a className="nav"><Lightbulb />Suggestions</a>
-          <a className="nav"><BarChart />Reports</a>
-          <a className="nav"><Bell />Notifications</a>
-          <a className="nav"><Users />Profile</a>
+          <button type="button" className="nav" disabled title="Book Search is not available in this dashboard yet."><Search />Book Search · Unavailable</button>
+          <button type="button" className="nav" disabled title="Suggestions is a read-only dashboard report here."><Lightbulb />Suggestions · Report</button>
+          <button type="button" className="nav" disabled title="Additional report pages are not available yet."><BarChart />Reports · Unavailable</button>
+          <button type="button" className="nav" disabled title="Notifications are not available in this dashboard yet."><Bell />Notifications · Unavailable</button>
+          <button type="button" className="nav" disabled title="Profile editing is not available yet."><Users />Profile · Unavailable</button>
         </nav>
         <div className="quick">
           <div className="quick-title">
@@ -46,8 +46,8 @@ export default function DepartmentDashboard() {
           <label>Category</label>
           <select value={category} onChange={e => setCategory(e.target.value)}>
             <option value="">All Categories</option>
-            {(data?.borrowing_by_category || []).map(x =>
-              <option key={x.category_id || x.category_name} value={x.category_id}>{x.category_name}</option>)}
+            {(data?.categories || []).map(x =>
+              <option key={x.category_id} value={x.category_id}>{x.category_name}</option>)}
           </select>
           <label>User Type</label>
           <select value={userType} onChange={e => setUserType(e.target.value)}>
@@ -66,12 +66,18 @@ export default function DepartmentDashboard() {
           <button className="filter-btn" onClick={reload}>
             <Filter size={16} />Apply Filters
           </button>
+          <button className="filter-btn secondary" onClick={() => {
+            setStart('2026-04-01'); setEnd('2026-10-01'); setCategory('');
+            setUserType(''); setSuggestionStatus(''); setSearch('');
+          }}>
+            Reset Filters
+          </button>
         </div>
         <div className="sidebar-footer">A smarter library<br />for a brighter tomorrow<br /><br /><b>MITRC</b><br />Modern Institute of Technology and Research Centre<br />Alwar, Rajasthan</div>
       </aside>
       <main className="main">
         <header className="topbar">
-          <button className="mobile-menu">
+          <button className="mobile-menu" disabled title="Mobile navigation menu is not available yet.">
             <Menu />
           </button>
           <div className="searchbox">
@@ -103,7 +109,7 @@ export default function DepartmentDashboard() {
                 <input type="date" value={end} onChange={e => setEnd(e.target.value)} />
               </div>
               <button className="report-btn" onClick={() => window.print()}>
-                <FileDown size={17} />Generate Report
+                <FileDown size={17} />Print Report
               </button>
             </div>
           </div>{error ?

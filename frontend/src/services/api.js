@@ -27,6 +27,31 @@ export async function getMyLoans() {
   return fetchWithAuth('/api/users/me/loans');
 }
 
+export async function requestBook(bookId) {
+  return fetchWithAuth('/api/users/me/loans/requests', {
+    method: 'POST',
+    body: JSON.stringify({ book_id: bookId }),
+  });
+}
+
+export async function cancelMyLoan(loanId) {
+  return fetchWithAuth(`/api/users/me/loans/${loanId}/cancel`, { method: 'POST' });
+}
+
+export async function getLibrarianLoanRequests() {
+  return fetchWithAuth('/api/librarian/loan-requests');
+}
+
+export async function reviewLoanRequest(loanId, decision) {
+  return fetchWithAuth(`/api/librarian/loan-requests/${loanId}/review`, {
+    method: 'POST', body: JSON.stringify({ decision }),
+  });
+}
+
+export async function issueApprovedLoan(loanId) {
+  return fetchWithAuth(`/api/librarian/loan-requests/${loanId}/issue`, { method: 'POST' });
+}
+
 export async function getMySuggestions() {
   return fetchWithAuth('/api/users/me/suggestions');
 }

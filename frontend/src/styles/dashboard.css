@@ -61,6 +61,15 @@ body {
     width: 18px
 }
 
+.nav:disabled {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    opacity: .62;
+    cursor: not-allowed;
+}
+
 .nav.active {
     background: #1f65e8;
     color: white

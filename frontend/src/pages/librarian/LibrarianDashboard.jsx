@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowDownToLine, ArrowUpFromLine, BookOpen, LayoutDashboard, Lightbulb, LogOut, Plus, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getLibrarianDashboard } from '../../services/reportService';
+import { getLibrarianLoanRequests, reviewLoanRequest, issueApprovedLoan } from '../../services/api';
 
 const booksSeed = [
   { id: 'BK-001', title: 'Clean Code', author: 'Robert C. Martin', copies: 5 },
@@ -17,18 +18,67 @@ export default function LibrarianDashboard() {
   const [books, setBooks] = useState(booksSeed);
   const [dashboard, setDashboard] = useState(null);
   const [dashboardError, setDashboardError] = useState('');
+  const [loanRequests, setLoanRequests] = useState([]);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [queueError, setQueueError] = useState('');
+  const [queueActionId, setQueueActionId] = useState('');
+  const [queueMessage, setQueueMessage] = useState('');
   useEffect(() => {
     if (!token) return undefined;
     let active = true;
     getLibrarianDashboard(token)
       .then(data => { if (active) setDashboard(data); })
       .catch(error => { if (active) setDashboardError(error.message || 'Unable to load library analytics.'); });
+    getLibrarianLoanRequests()
+      .then(result => { if (active) { setLoanRequests(result.data || []); setQueueError(''); } })
+      .catch(error => { if (active) setQueueError(error.message || 'Unable to load borrowing requests.'); })
+      .finally(() => { if (active) setQueueLoading(false); });
     return () => { active = false; };
   }, [token]);
   const summary = dashboard?.summary;
   const formatCount = value => value == null ? '—' : new Intl.NumberFormat('en-IN').format(value);
   const filtered = useMemo(() => books.filter(book => `${book.id} ${book.title} ${book.author}`.toLowerCase().includes(query.toLowerCase())), [books, query]);
-  const nav = [['dashboard', LayoutDashboard, 'Dashboard'], ['catalogue', BookOpen, 'Manage Catalogue'], ['issue', ArrowUpFromLine, 'Issue Book'], ['return', ArrowDownToLine, 'Return Books'], ['suggestions', Lightbulb, 'Suggestions'], ['users', Users, 'Users']];
+  async function refreshQueue() {
+    setQueueLoading(true);
+    setQueueError('');
+    try {
+      const result = await getLibrarianLoanRequests();
+      setLoanRequests(result.data || []);
+    } catch (error) {
+      setQueueError(error.message || 'Unable to load borrowing requests.');
+    } finally {
+      setQueueLoading(false);
+    }
+  }
+  async function handleReview(loanId, decision) {
+    setQueueActionId(loanId);
+    setQueueMessage('');
+    setQueueError('');
+    try {
+      await reviewLoanRequest(loanId, decision);
+      setQueueMessage(`Request ${decision.toLowerCase()}.`);
+      await refreshQueue();
+    } catch (error) {
+      setQueueError(error.message || 'Unable to update request.');
+    } finally {
+      setQueueActionId('');
+    }
+  }
+  async function handleIssue(loanId) {
+    setQueueActionId(loanId);
+    setQueueMessage('');
+    setQueueError('');
+    try {
+      await issueApprovedLoan(loanId);
+      setQueueMessage('Book issued successfully.');
+      await refreshQueue();
+    } catch (error) {
+      setQueueError(error.message || 'Unable to issue this book.');
+    } finally {
+      setQueueActionId('');
+    }
+  }
+  const nav = [['dashboard', LayoutDashboard, 'Dashboard'], ['catalogue', BookOpen, 'Manage Catalogue'], ['issue', ArrowUpFromLine, 'Borrowing Requests'], ['return', ArrowDownToLine, 'Return Books'], ['suggestions', Lightbulb, 'Suggestions'], ['users', Users, 'Users']];
   return (
     <div className="prototype-shell librarian-shell">
       <aside className="prototype-sidebar librarian-sidebar">
@@ -54,7 +104,7 @@ export default function LibrarianDashboard() {
       <main className="prototype-main">
         <header className="prototype-header">
           <div>
-            <b>{page === 'dashboard' ? 'Librarian Dashboard' : page === 'catalogue' ? 'Manage Catalogue' : page === 'issue' ? 'Issue Book' : page === 'return' ? 'Return Books' : page === 'suggestions' ? 'Acquisition Demand' : 'Users'}</b>
+            <b>{page === 'dashboard' ? 'Librarian Dashboard' : page === 'catalogue' ? 'Manage Catalogue' : page === 'issue' ? 'Borrowing Requests' : page === 'return' ? 'Return Books' : page === 'suggestions' ? 'Acquisition Demand' : 'Users'}</b>
             <small>Library control center</small>
           </div>
           <span>
@@ -132,7 +182,7 @@ export default function LibrarianDashboard() {
             </Panel>
           </>}
           {page === 'issue' &&
-            <FormPanel title="Issue Book" label="Student ID" second="Book ID / ISBN" button="Issue Now" />
+            <RequestQueue requests={loanRequests} loading={queueLoading} error={queueError} message={queueMessage} actionId={queueActionId} onRefresh={refreshQueue} onReview={handleReview} onIssue={handleIssue} />
           }
           {page === 'return' &&
             <FormPanel title="Return Book" label="Book ID / Accession Number" button="Return Book" />
@@ -178,6 +228,36 @@ function Panel({ title, children }) {
       </div>
     </section>);
 }
+function RequestQueue({ requests, loading, error, message, actionId, onRefresh, onReview, onIssue }) {
+  return (
+    <Panel title="Borrowing Requests">
+      <div className="prototype-page-title">
+        <p className="prototype-muted">Review incoming student/faculty requests; approved copies remain reserved until issued.</p>
+        <button type="button" onClick={onRefresh} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
+      </div>
+      {message && <div className="notice success" role="status">{message}</div>}
+      {error && <div className="notice error" role="alert">{error} <button type="button" onClick={onRefresh}>Retry</button></div>}
+      {loading && requests.length === 0 && <p className="prototype-muted">Loading requests…</p>}
+      {!loading && !error && requests.length === 0 && <p className="prototype-muted">No pending borrowing requests.</p>}
+      {requests.map(request => (
+        <article className="prototype-book-row" key={request.id}>
+          <div>
+            <b>{request.book_title}</b>
+            <small>{request.book_author} · {request.requester_name} ({request.requester_role}) · {request.requester_id}</small>
+            <small>Submitted {request.request_submitted_at ? new Date(request.request_submitted_at).toLocaleString() : '—'}</small>
+          </div>
+          <span className={`loan-status loan-status-${request.status.toLowerCase()}`}>{request.status}</span>
+          {request.status === 'REQUESTED' && <div className="loan-actions">
+            <button type="button" disabled={actionId === request.id} onClick={() => onReview(request.id, 'APPROVED')}>Approve</button>
+            <button type="button" disabled={actionId === request.id} onClick={() => onReview(request.id, 'REJECTED')}>Reject</button>
+          </div>}
+          {request.status === 'APPROVED' && <button type="button" disabled={actionId === request.id} onClick={() => onIssue(request.id)}>{actionId === request.id ? 'Issuing…' : 'Issue book'}</button>}
+        </article>
+      ))}
+    </Panel>
+  );
+}
+
 function FormPanel({ title, label, second, button }) {
   return (
     <Panel title={title}>

@@ -11,5 +11,5 @@ if (-not (Test-Path (Join-Path $frontend 'node_modules'))) {
     npm.cmd install
     if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
 }
-npm.cmd run dev -- --port 5174
+npm.cmd run dev -- --port 5173
 exit $LASTEXITCODE
