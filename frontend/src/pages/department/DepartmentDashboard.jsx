@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useDepartmentDashboard } from '../../hooks/useDepartmentDashboard';
 import CalendarDatePicker from '../../components/department/CalendarDatePicker';
 import { BorrowingTrend, CategoryBars, StudentFaculty, CopyStatus, SuggestionBars, Utilization } from '../../components/department/Charts';
+import DashboardLayout from '../../components/dashboard/DashboardLayout';
 
 const DEFAULT_START = '2026-04-01';
 const DEFAULT_END = '2026-10-01';
@@ -41,7 +42,35 @@ export default function DepartmentDashboard() {
   const s = data?.summary || {};
   const c = data?.comparisons || {};
   const fmt = value => new Intl.NumberFormat('en-IN').format(value ?? 0);
+  const navItems = [
+    { id: 'dashboard', icon: Layers3, label: 'Dashboard' },
+    { id: 'suggestions', icon: Lightbulb, label: 'Suggestions' },
+    { id: 'reports', icon: BarChart, label: 'Reports' },
+    { id: 'book-search', icon: Search, label: 'Book Search', disabled: true, reason: 'Department book search is not implemented.' },
+  ];
+  const onNavigate = section => navigateTo(section, section === 'reports' ? 'department-reports' : section === 'suggestions' ? 'department-suggestions' : 'department-dashboard');
+  const sidebarContent = (
+    <div className="quick">
+      <div className="quick-title"><Filter />Quick Filters</div>
+      <label htmlFor="department-category-filter">Category</label>
+      <select id="department-category-filter" value={category} onChange={e => setCategory(e.target.value)}>
+        <option value="">All Categories</option>
+        {(data?.categories || []).map(item => <option key={item.category_id} value={item.category_id}>{item.category_name}</option>)}
+      </select>
+      <label htmlFor="department-user-filter">User Type</label>
+      <select id="department-user-filter" value={userType} onChange={e => setUserType(e.target.value)}>
+        <option value="">All Users</option><option value="STUDENT">Students</option><option value="FACULTY">Faculty</option>
+      </select>
+      <label htmlFor="department-suggestion-filter">Suggestion Status</label>
+      <select id="department-suggestion-filter" value={suggestionStatus} onChange={e => setSuggestionStatus(e.target.value)}>
+        <option value="">All Statuses</option><option value="SUBMITTED">Submitted</option><option value="UNDER_REVIEW">Under Review</option><option value="APPROVED">Approved</option><option value="ORDERED">Ordered</option>
+      </select>
+      <button className="filter-btn" onClick={reload} disabled={dateRangeInvalid}><Filter size={16} />Apply Filters</button>
+      <button className="filter-btn secondary" onClick={resetFilters}>Reset Filters</button>
+    </div>
+  );
   return (
+    <DashboardLayout user={user} role="DEPARTMENT" title="Department Dashboard" subtitle={data?.scope?.name || 'Department analytics'} navItems={navItems} activeItem={activeSection} onNavigate={onNavigate} onLogout={signOut} sidebarContent={sidebarContent}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
@@ -56,7 +85,6 @@ export default function DepartmentDashboard() {
           <button type="button" className={`nav ${activeSection === 'suggestions' ? 'active' : ''}`} aria-current={activeSection === 'suggestions' ? 'page' : undefined} onClick={() => navigateTo('suggestions', 'department-suggestions')}><Lightbulb />Suggestions</button>
           <button type="button" className={`nav ${activeSection === 'reports' ? 'active' : ''}`} aria-current={activeSection === 'reports' ? 'page' : undefined} onClick={() => navigateTo('reports', 'department-reports')}><BarChart />Reports</button>
           <button type="button" className="nav" disabled title="Notifications are not available in this dashboard yet."><Bell />Notifications · Unavailable</button>
-          <button type="button" className="nav" disabled title="Profile editing is not available yet."><Users />Profile · Unavailable</button>
         </nav>
         <div className="quick">
           <div className="quick-title">
@@ -98,7 +126,7 @@ export default function DepartmentDashboard() {
       </aside>
       <main className="main" id="department-dashboard">
         <header className="topbar">
-          <button className="mobile-menu" disabled title="Mobile navigation menu is not available yet.">
+          <button type="button" className="mobile-menu" disabled title="Mobile navigation is available in the shared dashboard header.">
             <Menu />
           </button>
           <div className="searchbox">
@@ -204,7 +232,9 @@ export default function DepartmentDashboard() {
                 <div className="loading">No dashboard data returned.</div>}
         </div>
       </main>
-    </div>);
+    </div>
+    </DashboardLayout>
+  );
 }
 function Card({ icon, title, value, change, tone }) {
   return (

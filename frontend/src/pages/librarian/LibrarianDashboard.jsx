@@ -1,22 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, BookOpen, LayoutDashboard, Lightbulb, LogOut, Plus, Search, Users } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowDownToLine, ArrowUpFromLine, BookOpen, LayoutDashboard, Lightbulb, LogOut, Users } from 'lucide-react';
+import DashboardLayout from '../../components/dashboard/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
 import { getLibrarianDashboard } from '../../services/reportService';
 import { getLibrarianLoanRequests, reviewLoanRequest, issueApprovedLoan } from '../../services/api';
 import LibrarianUsers from './LibrarianUsers';
 
-const booksSeed = [
-  { id: 'BK-001', title: 'Clean Code', author: 'Robert C. Martin', copies: 5 },
-  { id: 'BK-002', title: 'Deep Learning', author: 'Ian Goodfellow', copies: 2 },
-  { id: 'BK-003', title: 'Computer Networks', author: 'Andrew S. Tanenbaum', copies: 7 },
-  { id: 'BK-004', title: 'Database System Concepts', author: 'Abraham Silberschatz', copies: 6 },
-];
-
 export default function LibrarianDashboard() {
   const { user, token, signOut } = useAuth();
   const [page, setPage] = useState('dashboard');
-  const [query, setQuery] = useState('');
-  const [books, setBooks] = useState(booksSeed);
   const [dashboard, setDashboard] = useState(null);
   const [dashboardError, setDashboardError] = useState('');
   const [loanRequests, setLoanRequests] = useState([]);
@@ -38,7 +30,6 @@ export default function LibrarianDashboard() {
   }, [token]);
   const summary = dashboard?.summary;
   const formatCount = value => value == null ? '—' : new Intl.NumberFormat('en-IN').format(value);
-  const filtered = useMemo(() => books.filter(book => `${book.id} ${book.title} ${book.author}`.toLowerCase().includes(query.toLowerCase())), [books, query]);
   async function refreshQueue() {
     setQueueLoading(true);
     setQueueError('');
@@ -80,7 +71,13 @@ export default function LibrarianDashboard() {
     }
   }
   const nav = [['dashboard', LayoutDashboard, 'Dashboard'], ['catalogue', BookOpen, 'Manage Catalogue'], ['issue', ArrowUpFromLine, 'Borrowing Requests'], ['return', ArrowDownToLine, 'Return Books'], ['suggestions', Lightbulb, 'Suggestions'], ['users', Users, 'Users']];
+  const navItems = nav.map(([id, icon, label]) => ({
+    id, icon, label,
+    ...( ['catalogue', 'return', 'suggestions'].includes(id) ? { disabled: true, reason: id === 'catalogue' ? 'Catalogue management is not connected to a backend workflow.' : id === 'return' ? 'Book returns are not connected to a backend workflow.' : 'A librarian suggestion list is not available from the API.' } : {}),
+  }));
+  const pageTitle = { dashboard: 'Librarian Dashboard', catalogue: 'Manage Catalogue', issue: 'Borrowing Requests', return: 'Return Books', suggestions: 'Suggestions', users: 'User Management' }[page] || 'Librarian Dashboard';
   return (
+    <DashboardLayout user={user} role="LIBRARIAN" title={pageTitle} subtitle="Library control center" navItems={navItems} activeItem={page} onNavigate={setPage} onLogout={signOut} onOpenUsers={() => setPage('users')}>
     <div className="prototype-shell librarian-shell">
       <aside className="prototype-sidebar librarian-sidebar">
         <div className="prototype-brand"><b>MITRC <span>LibSphere</span></b>
@@ -123,93 +120,34 @@ export default function LibrarianDashboard() {
             <Stat value={formatCount(summary?.overdue_loans)} label="Overdue" />
             <Stat value={formatCount(summary?.suggestion_votes)} label="Suggestion Votes" />
           </div>
-          <Panel title="Quick Actions">
+          <Panel title="Available actions">
             <div className="prototype-action-grid">
-              <button onClick={() => setPage('catalogue')}>
-                <Plus size={16} />Add Book
-              </button>
-              <button onClick={() => setPage('catalogue')}>
-                <Plus size={16} />Add Copy
-              </button>
-              <button onClick={() => setPage('issue')}>
-                <ArrowUpFromLine size={16} />Issue Book
-              </button>
-              <button onClick={() => setPage('return')}>
-                <ArrowDownToLine size={16} />Return Book
-              </button>
-              <button onClick={() => setPage('users')}>
-                <Users size={16} />Manage Users
-              </button>
-              <button onClick={() => setPage('suggestions')}>
-                <Lightbulb size={16} />Suggestions
-              </button>
+              <button type="button" onClick={() => setPage('issue')}><ArrowUpFromLine size={16} />Borrowing Requests</button>
+              <button type="button" onClick={() => setPage('users')}><Users size={16} />Manage Users</button>
             </div>
+            <p className="prototype-muted">Catalogue management, returns, and librarian suggestion review are unavailable until their API workflows are implemented.</p>
           </Panel>
         </>
         }
           {page === 'catalogue' && <>
-            <div className="prototype-page-title">
-              <h1>Manage Catalogue</h1>
-              <button className="prototype-primary" onClick={() => setBooks(current => [...current, { id: `BK-${String(current.length + 1).padStart(3, '0')}`, title: 'New Catalogue Record', author: 'Pending metadata', copies: 0 }])}>
-                <Plus size={16} /> Add Book
-              </button>
-            </div>
-            <Panel title="Catalogue">
-              <div className="prototype-search">
-                <Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search books, authors, ISBN…" />
-              </div>
-              <table className="prototype-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Title</th>
-                    <th>Author</th>
-                    <th>Copies</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>{filtered.map(book =>
-                  <tr key={book.id}>
-                    <td>{book.id}</td>
-                    <td><b>{book.title}</b></td>
-                    <td>{book.author}</td>
-                    <td>{book.copies}</td>
-                    <td>
-                      <button onClick={() => setBooks(current => current.filter(x => x.id !== book.id))}>Remove</button>
-                    </td>
-                  </tr>
-                )}</tbody>
-              </table>
+            <Panel title="Catalogue management unavailable">
+              <p className="prototype-muted">Book search is available in the shared header. Adding, editing, and removing catalogue records are not connected to the library API.</p>
             </Panel>
           </>}
           {page === 'issue' &&
             <RequestQueue requests={loanRequests} loading={queueLoading} error={queueError} message={queueMessage} actionId={queueActionId} onRefresh={refreshQueue} onReview={handleReview} onIssue={handleIssue} />
           }
-          {page === 'return' &&
-            <FormPanel title="Return Book" label="Book ID / Accession Number" button="Return Book" />
-          }
-          {page === 'suggestions' &&
-            <Panel title="Acquisition Demand">
-              <div className="prototype-suggestion-row">
-                <span>Artificial Intelligence: A Modern Approach</span>
-                <b>15 votes</b>
-              </div>
-              <div className="prototype-suggestion-row">
-                <span>Hands-On Machine Learning</span>
-                <b>12 votes</b>
-              </div>
-              <div className="prototype-suggestion-row">
-                <span>Clean Code</span>
-                <b>10 votes</b>
-              </div>
-            </Panel>}
+          {page === 'return' && <Panel title="Returns unavailable"><p className="prototype-muted">Book returns are not connected to a backend workflow. No return action is available.</p></Panel>}
+          {page === 'suggestions' && <Panel title="Suggestions unavailable"><p className="prototype-muted">A librarian suggestion list is not available from the API yet.</p></Panel>}
           {page === 'users' &&
             <Panel title="User Management">
               <LibrarianUsers token={token} />
             </Panel>}
         </section>
       </main>
-    </div>);
+    </div>
+    </DashboardLayout>
+  );
 }
 function Stat({ value, label }) {
   return (
@@ -257,23 +195,4 @@ function RequestQueue({ requests, loading, error, message, actionId, onRefresh, 
       ))}
     </Panel>
   );
-}
-
-function FormPanel({ title, label, second, button }) {
-  return (
-    <Panel title={title}>
-      <div className="prototype-form">
-        <label>
-          {label}
-          <input />
-        </label>
-        {second &&
-          <label>
-            {second}
-            <input />
-          </label>
-        }
-        <button className="prototype-primary">{button}</button>
-      </div>
-    </Panel>);
 }

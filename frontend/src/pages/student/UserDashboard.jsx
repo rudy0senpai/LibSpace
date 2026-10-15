@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { BookOpen, Bell, Lightbulb, LogOut, Search, Table2, ArrowUp, Plus, Loader2 } from 'lucide-react';
+import DashboardLayout from '../../components/dashboard/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
 import { searchBooks, getMyLoans, getMySuggestions, createSuggestion, voteSuggestion, getCategories, requestBook, cancelMyLoan } from '../../services/api';
 import RequestedBooks from './RequestedBooks';
@@ -69,14 +70,14 @@ export default function UserDashboard() {
     }
   }
 
-  async function handleSearch(append = false) {
+  async function handleSearch(append = false, searchQuery = query) {
     const pageToLoad = append ? searchPage + 1 : 1;
     const sequence = ++searchSequence.current;
     setLoading(true);
     setError('');
     try {
       const res = await searchBooks({
-        q: query, page: pageToLoad, per_page: 24,
+        q: searchQuery, page: pageToLoad, per_page: 24,
         category_id: categoryFilter || undefined,
         availability: availabilityFilter || undefined,
       });
@@ -165,7 +166,24 @@ export default function UserDashboard() {
     ['notifications', Bell, 'Notifications'],
   ];
 
+  const sharedNav = nav.map(([id, icon, label]) => ({
+    id, icon, label,
+    ...(id === 'notifications' ? { disabled: true, reason: 'The live notification feed is not connected.' } : {}),
+  }));
+  const pageTitle = {
+    dashboard: user?.role === 'FACULTY' ? 'Teacher Dashboard' : 'Student Dashboard',
+    search: 'Search Catalogue', mybooks: 'My Books', suggestions: 'Community Suggestions', notifications: 'Notifications',
+  }[page] || 'Library Dashboard';
+  function openCatalogue(value) {
+    setQuery(value);
+    setPage('search');
+    setSearchResults([]);
+    setSearchTotal(0);
+    handleSearch(false, value);
+  }
+
   return (
+    <DashboardLayout user={user} role={user?.role || 'STUDENT'} title={pageTitle} subtitle="Personalized library activity" navItems={sharedNav} activeItem={page} onNavigate={setPage} onLogout={signOut} onOpenCatalogue={openCatalogue}>
     <div className="prototype-shell">
       <aside className="prototype-sidebar">
         <div className="prototype-brand">
@@ -336,15 +354,15 @@ export default function UserDashboard() {
           {page === 'notifications' && (
             <>
               <h1>Notifications</h1>
-              <Panel title="Recent notifications">
-                <div className="notice warning">⚠ Your books may be due soon</div>
-                <div className="notice success">✓ Request processed</div>
-              </Panel>
+                <Panel title="Notification status">
+                  <p className="prototype-muted">The live notification feed is not connected. No library notifications are shown here.</p>
+                </Panel>
             </>
           )}
         </section>
       </main>
     </div>
+    </DashboardLayout>
   );
 }
 
