@@ -10,6 +10,7 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef(null);
 
   useEffect(() => {
@@ -18,12 +19,16 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
       setResult({ books: [], users: [] });
       setError('');
       setLoading(false);
+      setActiveIndex(-1);
       return undefined;
     }
     let current = true;
     const timer = window.setTimeout(async () => {
       setLoading(true);
       setError('');
+      setResult({ books: [], users: [] });
+      setSelected(null);
+      setActiveIndex(-1);
       try {
         const [bookResponse, userResponse] = await Promise.all([
           searchBooks({ q: trimmed, page: 1, per_page: 6 }),
@@ -53,6 +58,17 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
   }, []);
 
   const hasResults = result.books.length > 0 || result.users.length > 0;
+  const selectableResults = [
+    ...result.books.map(item => ({ type: 'book', item })),
+    ...result.users.map(item => ({ type: 'user', item })),
+  ];
+  const selectResult = index => {
+    const entry = selectableResults[index];
+    if (entry) {
+      setSelected(entry);
+      setActiveIndex(index);
+    }
+  };
   return (
     <div className="global-search" ref={rootRef}>
       <Search size={17} aria-hidden="true" />
@@ -60,11 +76,27 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
         type="search"
         value={query}
         onFocus={() => setOpen(true)}
-        onChange={event => { setQuery(event.target.value); setSelected(null); setOpen(true); }}
-        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); setOpen(true); } }}
+        onChange={event => { setQuery(event.target.value); setSelected(null); setActiveIndex(-1); setResult({ books: [], users: [] }); setOpen(true); }}
+        onKeyDown={event => {
+          if (event.key === 'ArrowDown' && selectableResults.length) {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex(index => Math.min(index + 1, selectableResults.length - 1));
+          } else if (event.key === 'ArrowUp' && selectableResults.length) {
+            event.preventDefault();
+            setActiveIndex(index => Math.max(index - 1, 0));
+          } else if (event.key === 'Enter') {
+            event.preventDefault();
+            if (activeIndex >= 0) selectResult(activeIndex);
+            else setOpen(true);
+          }
+        }}
         aria-label={role === 'LIBRARIAN' ? 'Search books and users' : 'Search books'}
+        role="combobox"
+        aria-autocomplete="list"
         aria-expanded={open && query.trim().length >= 2}
-        aria-controls="global-search-results"
+        aria-controls="global-search-options"
+        aria-activedescendant={activeIndex >= 0 ? `global-search-option-${activeIndex}` : undefined}
         placeholder={role === 'LIBRARIAN' ? 'Search books or users…' : 'Search books…'}
       />
       {query && <button type="button" className="global-search-clear" aria-label="Clear search" onClick={() => { setQuery(''); setSelected(null); setOpen(true); }}><X size={15} /></button>}
@@ -73,20 +105,25 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
           {loading && <p className="dashboard-search-status" role="status"><LoaderCircle size={15} className="dashboard-spin" /> Searching…</p>}
           {error && <div className="dashboard-search-error" role="alert">{error}<button type="button" onClick={() => setRetry(value => value + 1)}>Retry</button></div>}
           {!loading && !error && !hasResults && <p className="dashboard-search-status">No matching books{role === 'LIBRARIAN' ? ' or users' : ''}.</p>}
-          {result.books.length > 0 && <>
-            <div className="dashboard-search-heading"><BookOpen size={14} /> Books</div>
-            {result.books.map(book => <button type="button" className="dashboard-search-result" key={book.id} onClick={() => setSelected({ type: 'book', item: book })}>
-              <span><b>{book.title}</b><small>{book.author || 'Author unavailable'} · {book.category}</small></span>
-              <em>{book.available > 0 ? `${book.available} available` : 'Unavailable'}</em>
-            </button>)}
-          </>}
-          {result.users.length > 0 && <>
-            <div className="dashboard-search-heading"><UsersRound size={14} /> Users</div>
-            {result.users.map(account => <button type="button" className="dashboard-search-result" key={`${account.role}:${account.user_id || account.name}`} onClick={() => setSelected({ type: 'user', item: account })}>
-              <span><b>{account.name}</b><small>{account.user_id || 'No user ID'} · {account.role}</small></span>
-              <em>{account.department?.code || '—'}</em>
-            </button>)}
-          </>}
+          <div className="global-search-options" id="global-search-options" role="listbox" aria-label="Catalogue results">
+            {result.books.length > 0 && <div role="group" aria-label="Books">
+              <div className="dashboard-search-heading"><BookOpen size={14} /> Books</div>
+              {result.books.map((book, index) => <div role="option" aria-selected={activeIndex === index} id={`global-search-option-${index}`} tabIndex={-1} className={`dashboard-search-result${activeIndex === index ? ' active' : ''}`} key={book.id} onMouseEnter={() => setActiveIndex(index)} onClick={() => selectResult(index)}>
+                <span><b>{book.title}</b><small>{book.author || 'Author unavailable'} · {book.category}</small></span>
+                <em>{book.available > 0 ? `${book.available} available` : 'Unavailable'}</em>
+              </div>)}
+            </div>}
+            {result.users.length > 0 && <div role="group" aria-label="Users">
+              <div className="dashboard-search-heading"><UsersRound size={14} /> Users</div>
+              {result.users.map((account, index) => {
+                const optionIndex = result.books.length + index;
+                return <div role="option" aria-selected={activeIndex === optionIndex} id={`global-search-option-${optionIndex}`} tabIndex={-1} className={`dashboard-search-result${activeIndex === optionIndex ? ' active' : ''}`} key={`${account.role}:${account.user_id || account.name}`} onMouseEnter={() => setActiveIndex(optionIndex)} onClick={() => selectResult(optionIndex)}>
+                  <span><b>{account.name}</b><small>{account.user_id || 'No user ID'} · {account.role}</small></span>
+                  <em>{account.department?.code || '—'}</em>
+                </div>;
+              })}
+            </div>}
+          </div>
           {selected && <div className="dashboard-search-detail" aria-live="polite">
             {selected.type === 'book' ? <>
               <b>{selected.item.title}</b><span>{selected.item.author || 'Author unavailable'} · {selected.item.isbn || 'No ISBN listed'}</span>

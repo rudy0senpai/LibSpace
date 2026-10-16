@@ -5,9 +5,9 @@ import { getLibrarianUsers } from '../../services/api';
 const ROLES = ['STUDENT', 'FACULTY', 'DEPARTMENT', 'LIBRARIAN', 'ADMIN'];
 const ROLE_LABELS = { STUDENT: 'Student', FACULTY: 'Faculty', DEPARTMENT: 'Department', LIBRARIAN: 'Librarian', ADMIN: 'Admin' };
 
-export default function LibrarianUsers({ token }) {
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+export default function LibrarianUsers({ token, initialSearch = '' }) {
+  const [searchInput, setSearchInput] = useState(initialSearch);
+  const [search, setSearch] = useState(initialSearch.trim());
   const [role, setRole] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [accountStatus, setAccountStatus] = useState('');
@@ -18,6 +18,12 @@ export default function LibrarianUsers({ token }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    setSearchInput(initialSearch);
+    setSearch(initialSearch.trim());
+    setPage(1);
+  }, [initialSearch]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(searchInput.trim()), 250);

@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
 from sqlalchemy.exc import IntegrityError
@@ -104,6 +105,45 @@ class SQLiteSeedTests(unittest.TestCase):
             ).count() == 0:
                 return book
         self.fail("No available unrequested test copy found")
+
+    def test_catalog_search_finds_title_author_and_isbn_without_optional_category_or_department(self):
+        marker = uuid.uuid4().hex[:10]
+        author = Author(name=f"Vera Searchauthor {marker}")
+        book = Book(
+            title=f"Crossrole Shelf Search {marker}",
+            isbn=f"979{marker}",
+            authors=[author],
+        )
+        backend.db.session.add(book)
+        backend.db.session.commit()
+        try:
+            client = backend.app.test_client()
+            token = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
+            headers = {"Authorization": f"Bearer {token}"}
+            for term in (book.title, author.name, book.isbn):
+                with self.subTest(term=term):
+                    response = client.get("/api/books/search", query_string={"q": term}, headers=headers)
+                    self.assertEqual(response.status_code, 200, response.get_json())
+                    data = response.get_json()["data"]
+                    self.assertEqual(data["total"], 1)
+                    self.assertEqual(data["items"][0]["title"], book.title)
+
+            empty = client.get("/api/books/search", query_string={"q": f"missing-{marker}"}, headers=headers)
+            self.assertEqual(empty.status_code, 200)
+            self.assertEqual(empty.get_json()["data"]["items"], [])
+            self.assertEqual(client.get("/api/books/search").status_code, 401)
+        finally:
+            backend.db.session.delete(book)
+            backend.db.session.delete(author)
+            backend.db.session.commit()
+
+    def test_catalog_search_rejects_overlong_query(self):
+        client = backend.app.test_client()
+        token = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
+        response = client.get("/api/books/search", query_string={"q": "x" * 201},
+                              headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"]["code"], "INVALID_FILTER")
 
     def test_student_request_is_persisted_reviewed_issued_and_user_scoped(self):
         client = backend.app.test_client()

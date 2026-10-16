@@ -46,9 +46,15 @@ export default function DepartmentDashboard() {
     { id: 'dashboard', icon: Layers3, label: 'Dashboard' },
     { id: 'suggestions', icon: Lightbulb, label: 'Suggestions' },
     { id: 'reports', icon: BarChart, label: 'Reports' },
-    { id: 'book-search', icon: Search, label: 'Book Search', disabled: true, reason: 'Department book search is not implemented.' },
+    { id: 'book-search', icon: Search, label: 'Book Search' },
   ];
-  const onNavigate = section => navigateTo(section, section === 'reports' ? 'department-reports' : section === 'suggestions' ? 'department-suggestions' : 'department-dashboard');
+  const onNavigate = section => {
+    if (section === 'book-search') {
+      document.querySelector('.global-search input')?.focus();
+      return;
+    }
+    navigateTo(section, section === 'reports' ? 'department-reports' : section === 'suggestions' ? 'department-suggestions' : 'department-dashboard');
+  };
   const sidebarContent = (
     <div className="quick">
       <div className="quick-title"><Filter />Quick Filters</div>

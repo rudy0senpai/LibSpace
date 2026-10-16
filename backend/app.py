@@ -836,6 +836,8 @@ def search_books():
         if not user:
             return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
         query = request.args.get("q", "").strip()
+        if len(query) > 200:
+            return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "Search is too long."}}), 400
         category_id = (request.args.get("category_id") or "").strip()
         availability = request.args.get("availability", "").strip().lower()
         try:
@@ -855,7 +857,7 @@ def search_books():
             if db.session.get(Category, category_id) is None:
                 return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "category_id is invalid."}}), 400
 
-        q = db.session.query(Book).join(Book.category).join(Book.departments)
+        q = db.session.query(Book)
         if query:
             q = q.filter(
                 (Book.title.ilike(f"%{query}%")) |

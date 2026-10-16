@@ -9,6 +9,7 @@ import LibrarianUsers from './LibrarianUsers';
 export default function LibrarianDashboard() {
   const { user, token, signOut } = useAuth();
   const [page, setPage] = useState('dashboard');
+  const [userSearch, setUserSearch] = useState('');
   const [dashboard, setDashboard] = useState(null);
   const [dashboardError, setDashboardError] = useState('');
   const [loanRequests, setLoanRequests] = useState([]);
@@ -77,7 +78,7 @@ export default function LibrarianDashboard() {
   }));
   const pageTitle = { dashboard: 'Librarian Dashboard', catalogue: 'Manage Catalogue', issue: 'Borrowing Requests', return: 'Return Books', suggestions: 'Suggestions', users: 'User Management' }[page] || 'Librarian Dashboard';
   return (
-    <DashboardLayout user={user} role="LIBRARIAN" title={pageTitle} subtitle="Library control center" navItems={navItems} activeItem={page} onNavigate={setPage} onLogout={signOut} onOpenUsers={() => setPage('users')}>
+    <DashboardLayout user={user} role="LIBRARIAN" title={pageTitle} subtitle="Library control center" navItems={navItems} activeItem={page} onNavigate={setPage} onLogout={signOut} onOpenUsers={value => { setUserSearch(value || ''); setPage('users'); }}>
     <div className="prototype-shell librarian-shell">
       <aside className="prototype-sidebar librarian-sidebar">
         <div className="prototype-brand"><b>MITRC <span>LibSphere</span></b>
@@ -141,7 +142,7 @@ export default function LibrarianDashboard() {
           {page === 'suggestions' && <Panel title="Suggestions unavailable"><p className="prototype-muted">A librarian suggestion list is not available from the API yet.</p></Panel>}
           {page === 'users' &&
             <Panel title="User Management">
-              <LibrarianUsers token={token} />
+              <LibrarianUsers token={token} initialSearch={userSearch} />
             </Panel>}
         </section>
       </main>
