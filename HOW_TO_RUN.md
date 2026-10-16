@@ -277,6 +277,20 @@ Check the backend terminal error, `APP_ENV`, and `DATABASE_URL`; testing mode re
 
 In testing mode, ensure both processes use testing mode: backend `APP_ENV=testing` and frontend `VITE_AUTH_MODE=testing`. Use a listed demo name, ID, and matching role; all three must identify the same seeded account. Role routes use the role returned by the backend, not a role-only UI choice. In normal mode, the backend login API expects email/password but the current frontend deliberately shows no credential form; passwordless demo login works only when both testing-mode gates are enabled. Do not enable those gates in production.
 
+If the three-field form displays **“Email and password are required.”**, do not change the frontend payload or weaken authentication. That is the backend's normal-auth `MISSING_CREDENTIALS` response: the Vite process is using `VITE_AUTH_MODE=testing`, but the Flask process is not using `APP_ENV=testing`. Stop only the confirmed LibSphere backend process, then restart it from the repository root with the testing SQLite URL and without running the seeder:
+
+```powershell
+$python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
+Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+$env:APP_ENV = 'testing'
+$env:DATABASE_URL = 'sqlite:///libsphere_test.db'
+$env:CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
+# Generate/set JWT_SECRET_KEY in this same PowerShell session using the snippet above.
+& $python .\backend\app.py
+```
+
+Keep the Vite process at `VITE_AUTH_MODE=testing`; restart it if that environment value was changed. A genuinely mismatched name/ID/role in a testing backend returns HTTP 401 `INVALID_IDENTITY` with “Name, user ID, and role did not match an active local testing account.”
+
 ## Stop and restart
 
 Stop each service in its own PowerShell window with **Ctrl+C**. If PowerShell was started in a pushed directory, `Pop-Location` returns to the previous directory; otherwise close that terminal after stopping the server. To restart, rerun only the backend command in the backend terminal and the frontend command in the frontend terminal, restoring the required session environment variables first. If a port is reported busy, identify the listener and process as described above; do not kill unrelated processes.

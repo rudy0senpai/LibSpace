@@ -144,6 +144,13 @@ class AuthApiContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"]["code"], "MISSING_CREDENTIALS")
 
+    def test_testing_login_rejects_normal_email_password_payload(self):
+        response = self.client.post("/api/auth/login", json={
+            "email": "urvashi@libsphere.test", "password": "not-a-testing-credential"
+        })
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"]["code"], "INVALID_IDENTITY")
+
     def test_disabled_accounts_cannot_restore_sessions(self):
         self.user.is_active = False
         with backend.app.app_context():
