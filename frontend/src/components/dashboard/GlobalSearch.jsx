@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Search, X, LoaderCircle, BookOpen, UsersRound } from 'lucide-react';
 import { searchBooks, getLibrarianUsers } from '../../services/api';
+import { lookupBookMetadata } from '../../services/metadataService';
 
 export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
   const [query, setQuery] = useState('');
@@ -11,7 +12,20 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
   const [retry, setRetry] = useState(0);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [metadata, setMetadata] = useState(null);
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [coverFailed, setCoverFailed] = useState(false);
   const rootRef = useRef(null);
+
+  useEffect(() => {
+    let current = true;
+    const book = selected?.type === 'book' ? selected.item : null;
+    setCoverFailed(false);
+    if (!book?.isbn || book.description) { setMetadata(null); return undefined; }
+    setMetadataLoading(true);
+    lookupBookMetadata(book.isbn).then(value => { if (current) setMetadata(value); }).finally(() => { if (current) setMetadataLoading(false); });
+    return () => { current = false; };
+  }, [selected]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -126,8 +140,11 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
           </div>
           {selected && <div className="dashboard-search-detail" aria-live="polite">
             {selected.type === 'book' ? <>
-              <b>{selected.item.title}</b><span>{selected.item.author || 'Author unavailable'} · {selected.item.isbn || 'No ISBN listed'}</span>
+              {metadata?.cover_url && !coverFailed ? <img src={metadata.cover_url} alt={`Cover of ${selected.item.title}`} className="dashboard-book-cover" loading="lazy" onError={() => setCoverFailed(true)} /> : <div className="dashboard-book-cover-placeholder" role="img" aria-label={`No cover available for ${selected.item.title}`}><BookOpen size={22} /><span>Cover unavailable</span></div>}
+              <b>{selected.item.title}</b><span>{selected.item.author || metadata?.authors?.join(', ') || 'Author unavailable'} · {selected.item.isbn || 'No ISBN listed'}</span>
               <small>{selected.item.available} of {selected.item.total} copies available · Rack {selected.item.rack || 'not listed'}</small>
+              {(metadataLoading || metadata?.description) && <small>{metadataLoading ? 'Checking publisher metadata…' : metadata.description}</small>}
+              {metadata?.attribution && <small>{metadata.attribution}</small>}
               {onOpenCatalogue && <button type="button" onClick={() => { onOpenCatalogue(selected.item.title); setOpen(false); }}>Open catalogue results</button>}
             </> : <>
               <b>{selected.item.name}</b><span>{selected.item.user_id} · {selected.item.role}</span>

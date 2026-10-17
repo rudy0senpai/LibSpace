@@ -300,8 +300,16 @@
     background: #fff;
     border: 1px solid #e2e8f0;
     border-radius: 12px;
-    padding: 18px
+    padding: 18px;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
 }
+.prototype-stat:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(70, 52, 31, .12); border-color: #bc8b57; }
+.prototype-stat:focus-visible { outline: 3px solid #865626; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .prototype-stat { transition: none; } }
 
 .prototype-stat b {
     font-size: 23px;

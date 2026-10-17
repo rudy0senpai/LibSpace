@@ -5,6 +5,8 @@ import { useAuth } from '../../context/AuthContext';
 import { getLibrarianDashboard } from '../../services/reportService';
 import { getLibrarianLoanRequests, reviewLoanRequest, issueApprovedLoan } from '../../services/api';
 import LibrarianUsers from './LibrarianUsers';
+import LibrarianWorkflows from './LibrarianWorkflows';
+
 
 export default function LibrarianDashboard() {
   const { user, token, signOut } = useAuth();
@@ -31,6 +33,10 @@ export default function LibrarianDashboard() {
   }, [token]);
   const summary = dashboard?.summary;
   const formatCount = value => value == null ? '—' : new Intl.NumberFormat('en-IN').format(value);
+  async function refreshDashboard() {
+    try { const result = await getLibrarianDashboard(token); setDashboard(result); setDashboardError(''); }
+    catch (error) { setDashboardError(error.message || 'Unable to load library analytics.'); }
+  }
   async function refreshQueue() {
     setQueueLoading(true);
     setQueueError('');
@@ -72,10 +78,7 @@ export default function LibrarianDashboard() {
     }
   }
   const nav = [['dashboard', LayoutDashboard, 'Dashboard'], ['catalogue', BookOpen, 'Manage Catalogue'], ['issue', ArrowUpFromLine, 'Borrowing Requests'], ['return', ArrowDownToLine, 'Return Books'], ['suggestions', Lightbulb, 'Suggestions'], ['users', Users, 'Users']];
-  const navItems = nav.map(([id, icon, label]) => ({
-    id, icon, label,
-    ...( ['catalogue', 'return', 'suggestions'].includes(id) ? { disabled: true, reason: id === 'catalogue' ? 'Catalogue management is not connected to a backend workflow.' : id === 'return' ? 'Book returns are not connected to a backend workflow.' : 'A librarian suggestion list is not available from the API.' } : {}),
-  }));
+  const navItems = nav.map(([id, icon, label]) => ({ id, icon, label }));
   const pageTitle = { dashboard: 'Librarian Dashboard', catalogue: 'Manage Catalogue', issue: 'Borrowing Requests', return: 'Return Books', suggestions: 'Suggestions', users: 'User Management' }[page] || 'Librarian Dashboard';
   return (
     <DashboardLayout user={user} role="LIBRARIAN" title={pageTitle} subtitle="Library control center" navItems={navItems} activeItem={page} onNavigate={setPage} onLogout={signOut} onOpenUsers={value => { setUserSearch(value || ''); setPage('users'); }}>
@@ -114,12 +117,12 @@ export default function LibrarianDashboard() {
           <h1>Library Control Center</h1>
           <p className="prototype-muted">{dashboardError || (dashboard?.meta?.source ? `Live figures from ${dashboard.meta.source}.` : 'Loading library analytics from the API…')}</p>
           <div className="prototype-stats six">
-            <Stat value={formatCount(summary?.total_books)} label="Total Books" />
-            <Stat value={formatCount(summary?.total_copies)} label="Total Copies" />
-            <Stat value={formatCount(summary?.available_copies)} label="Available" />
-            <Stat value={formatCount(summary?.borrowed_copies)} label="Borrowed" />
-            <Stat value={formatCount(summary?.overdue_loans)} label="Overdue" />
-            <Stat value={formatCount(summary?.suggestion_votes)} label="Suggestion Votes" />
+            <Stat value={formatCount(summary?.total_books)} label="Total Books" onActivate={() => setPage('catalogue')} />
+            <Stat value={formatCount(summary?.total_copies)} label="Total Copies" onActivate={() => setPage('catalogue')} />
+            <Stat value={formatCount(summary?.available_copies)} label="Available" onActivate={() => setPage('catalogue')} />
+            <Stat value={formatCount(summary?.borrowed_copies)} label="Borrowed" onActivate={() => setPage('return')} />
+            <Stat value={formatCount(summary?.overdue_loans)} label="Overdue" onActivate={() => setPage('return')} />
+            <Stat value={formatCount(summary?.suggestion_votes)} label="Suggestion Votes" onActivate={() => setPage('suggestions')} />
           </div>
           <Panel title="Available actions">
             <div className="prototype-action-grid">
@@ -130,16 +133,13 @@ export default function LibrarianDashboard() {
           </Panel>
         </>
         }
-          {page === 'catalogue' && <>
-            <Panel title="Catalogue management unavailable">
-              <p className="prototype-muted">Book search is available in the shared header. Adding, editing, and removing catalogue records are not connected to the library API.</p>
-            </Panel>
-          </>}
+          {page === 'catalogue' && <LibrarianWorkflows page="catalogue" onChanged={refreshDashboard} />}
+
           {page === 'issue' &&
             <RequestQueue requests={loanRequests} loading={queueLoading} error={queueError} message={queueMessage} actionId={queueActionId} onRefresh={refreshQueue} onReview={handleReview} onIssue={handleIssue} />
           }
-          {page === 'return' && <Panel title="Returns unavailable"><p className="prototype-muted">Book returns are not connected to a backend workflow. No return action is available.</p></Panel>}
-          {page === 'suggestions' && <Panel title="Suggestions unavailable"><p className="prototype-muted">A librarian suggestion list is not available from the API yet.</p></Panel>}
+          {page === 'return' && <LibrarianWorkflows page="return" onChanged={refreshDashboard} />}
+          {page === 'suggestions' && <LibrarianWorkflows page="suggestions" onChanged={refreshDashboard} />}
           {page === 'users' &&
             <Panel title="User Management">
               <LibrarianUsers token={token} initialSearch={userSearch} />
@@ -150,12 +150,12 @@ export default function LibrarianDashboard() {
     </DashboardLayout>
   );
 }
-function Stat({ value, label }) {
+function Stat({ value, label, onActivate }) {
   return (
-    <div className="prototype-stat">
+    <button type="button" className="prototype-stat" onClick={onActivate} aria-label={`${label}: ${value}. Open details`}>
       <b>{value}</b>
       <small>{label}</small>
-    </div>);
+    </button>);
 }
 function Panel({ title, children }) {
   return (

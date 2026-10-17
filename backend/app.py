@@ -14,7 +14,7 @@ from werkzeug.security import check_password_hash
 from werkzeug.exceptions import HTTPException
 
 from config import Config
-from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author, Notification, NotificationType, AuditLog
+from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author, Publisher, Notification, NotificationType, AuditLog
 from identity import canonicalize_name, canonicalize_role, canonicalize_user_id
 
 BACKEND_INSTANCE_DIR = Path(__file__).resolve().parent / "instance"
@@ -1235,6 +1235,259 @@ def vote_suggestion(suggestion_id):
         db.session.rollback()
         app.logger.exception("Vote failed")
         return jsonify({"status": "error", "error": {"code": "VOTE_FAILED", "message": "Unable to submit this vote."}}), 500
+
+
+@app.route("/api/librarian/catalogue", methods=["GET"])
+@jwt_required()
+def librarian_catalogue():
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    if user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
+        return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Librarian access required."}}), 403
+    try:
+        page, per_page = int(request.args.get("page", 1)), int(request.args.get("per_page", 20))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page and per_page must be integers."}}), 422
+    if page < 1 or not 1 <= per_page <= 100:
+        return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page must be positive; per_page must be 1-100."}}), 422
+    term = (request.args.get("q") or "").strip()
+    if len(term) > 200:
+        return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "Search is too long."}}), 422
+    query = db.session.query(Book)
+    if term:
+        query = query.filter(or_(Book.title.ilike(f"%{term}%"), Book.isbn.ilike(f"%{term}%"), Book.authors.any(Author.name.ilike(f"%{term}%"))))
+    total = query.count()
+    books = query.order_by(Book.title.asc(), Book.id.asc()).offset((page - 1) * per_page).limit(per_page).all()
+    def serialize_book(book):
+        return {"id": str(book.id), "title": book.title, "subtitle": book.subtitle, "isbn": book.isbn,
+                "authors": [a.name for a in book.authors], "description": book.description,
+                "publication_year": book.publication_year, "publisher": book.publisher.name if book.publisher else None,
+                "category": book.category.name if book.category else None,
+                "copies": [{"id": str(c.id), "accession_number": c.accession_number, "barcode": c.barcode,
+                            "rack": c.rack, "shelf": c.shelf, "status": c.status.value} for c in book.copies]}
+    return jsonify({"status": "success", "data": {"items": [serialize_book(b) for b in books], "total": total, "page": page, "per_page": per_page}}), 200
+
+
+def require_librarian():
+    user = authenticated_active_user()
+    if not user:
+        return None, (jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401)
+    if user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
+        return None, (jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Librarian access required."}}), 403)
+    return user, None
+
+
+def valid_isbn(value):
+    value = str(value or "").replace("-", "").replace(" ", "").upper()
+    if len(value) == 10 and (value[:9].isdigit() and (value[9].isdigit() or value[9] == "X")):
+        return sum((10 - i) * (10 if char == "X" else int(char)) for i, char in enumerate(value)) % 11 == 0
+    if len(value) == 13 and value.isdigit():
+        return sum(int(char) * (1 if i % 2 == 0 else 3) for i, char in enumerate(value)) % 10 == 0
+    return False
+
+
+@app.route("/api/librarian/catalogue", methods=["POST"])
+@jwt_required()
+def librarian_create_book():
+    user, error = require_librarian()
+    if error: return error
+    data = request.get_json(silent=True) or {}
+    title, isbn = str(data.get("title", "")).strip(), str(data.get("isbn", "")).replace("-", "").replace(" ", "").strip()
+    if not title or len(title) > 300:
+        return jsonify({"status": "error", "error": {"code": "INVALID_BOOK", "message": "Title is required (maximum 300 characters)."}}), 422
+    year = data.get("publication_year")
+    try: year = int(year) if year not in (None, "") else None
+    except (TypeError, ValueError): return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be an integer from 1400 to 2100."}}), 422
+    if year is not None and not 1400 <= year <= 2100:
+        return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be from 1400 to 2100."}}), 422
+    if isbn and not valid_isbn(isbn):
+        return jsonify({"status": "error", "error": {"code": "INVALID_ISBN", "message": "ISBN checksum is invalid; provide a valid ISBN-10 or ISBN-13."}}), 422
+    if isbn and db.session.query(Book.id).filter(func.replace(func.replace(Book.isbn, "-", ""), " ", "") == isbn).first():
+        return jsonify({"status": "error", "error": {"code": "DUPLICATE_ISBN", "message": "A book with this ISBN already exists."}}), 409
+    try:
+        publisher_name = str(data.get("publisher", "")).strip()
+        category_name = str(data.get("category", "")).strip()
+        publisher = db.session.query(Publisher).filter(func.lower(Publisher.name) == publisher_name.lower()).first() if publisher_name else None
+        category = db.session.query(Category).filter(func.lower(Category.name) == category_name.lower()).first() if category_name else None
+        book = Book(title=title, isbn=isbn or None, subtitle=(str(data.get("subtitle", "")).strip() or None),
+                    description=(str(data.get("description", "")).strip() or None),
+                    publication_year=year, language=(str(data.get("language", "English")).strip() or "English"),
+                    publisher=publisher or (Publisher(name=publisher_name) if publisher_name else None),
+                    category=category or (Category(name=category_name) if category_name else None))
+        db.session.add(book); db.session.flush()
+        for name in data.get("authors", []):
+            name = str(name).strip()
+            if name:
+                author = db.session.query(Author).filter(func.lower(Author.name) == name.lower()).first() or Author(name=name)
+                book.authors.append(author)
+        db.session.commit()
+        return jsonify({"status": "success", "data": {"id": str(book.id), "title": book.title}}), 201
+    except Exception:
+        app.logger.exception("Catalogue book creation failed")
+        db.session.rollback()
+        return jsonify({"status": "error", "error": {"code": "CREATE_BOOK_FAILED", "message": "Unable to create catalogue record."}}), 500
+
+
+@app.route("/api/librarian/catalogue/<book_id>", methods=["PATCH"])
+@jwt_required()
+def librarian_update_book(book_id):
+    user, error = require_librarian()
+    if error: return error
+    book = db.session.get(Book, book_id)
+    if not book: return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Book not found."}}), 404
+    data = request.get_json(silent=True) or {}
+    if "title" in data:
+        title = str(data["title"]).strip()
+        if not title: return jsonify({"status": "error", "error": {"code": "INVALID_BOOK", "message": "Title cannot be empty."}}), 422
+        book.title = title
+    for field in ("subtitle", "description", "publication_year", "language"):
+        if field in data: setattr(book, field, data[field])
+    if "publication_year" in data:
+        try: year = int(data["publication_year"]) if data["publication_year"] not in (None, "") else None
+        except (TypeError, ValueError): return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be an integer from 1400 to 2100."}}), 422
+        if year is not None and not 1400 <= year <= 2100: return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be from 1400 to 2100."}}), 422
+        book.publication_year = year
+    for field, model, relation in (("publisher", Publisher, "publisher"), ("category", Category, "category")):
+        if field in data:
+            value = str(data[field] or "").strip()
+            entry = db.session.query(model).filter(func.lower(model.name) == value.lower()).first() if value else None
+            if value and not entry: entry = model(name=value)
+            setattr(book, relation, entry)
+    if "isbn" in data:
+        isbn = str(data["isbn"]).replace("-", "").replace(" ", "").strip()
+        if isbn and not valid_isbn(isbn): return jsonify({"status": "error", "error": {"code": "INVALID_ISBN", "message": "ISBN checksum is invalid; provide a valid ISBN-10 or ISBN-13."}}), 422
+        duplicate = db.session.query(Book.id).filter(Book.isbn == (isbn or None), Book.id != book.id).first() if isbn else None
+        if duplicate: return jsonify({"status": "error", "error": {"code": "DUPLICATE_ISBN", "message": "A book with this ISBN already exists."}}), 409
+        book.isbn = isbn or None
+    if "authors" in data:
+        book.authors.clear()
+        for name in data["authors"]:
+            name = str(name).strip()
+            if name: book.authors.append(db.session.query(Author).filter(func.lower(Author.name) == name.lower()).first() or Author(name=name))
+    db.session.commit()
+    return jsonify({"status": "success", "data": {"id": str(book.id), "title": book.title}}), 200
+
+
+@app.route("/api/librarian/catalogue/<book_id>/copies", methods=["POST"])
+@jwt_required()
+def librarian_add_copy(book_id):
+    user, error = require_librarian()
+    if error: return error
+    book = db.session.get(Book, book_id)
+    if not book: return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Book not found."}}), 404
+    data = request.get_json(silent=True) or {}
+    accession, barcode, rack, shelf = [str(data.get(k, "")).strip() for k in ("accession_number", "barcode", "rack", "shelf")]
+    if not all((accession, barcode, rack, shelf)):
+        return jsonify({"status": "error", "error": {"code": "INVALID_COPY", "message": "Accession number, barcode, rack and shelf are required."}}), 422
+    if db.session.query(BookCopy.id).filter(or_(BookCopy.accession_number == accession, BookCopy.barcode == barcode)).first():
+        return jsonify({"status": "error", "error": {"code": "DUPLICATE_COPY_ID", "message": "Accession number or barcode already exists."}}), 409
+    copy = BookCopy(book_id=book.id, accession_number=accession, barcode=barcode, rack=rack, shelf=shelf, acquired_at=datetime.utcnow().date())
+    db.session.add(copy); db.session.commit()
+    return jsonify({"status": "success", "data": {"id": str(copy.id), "status": copy.status.value}}), 201
+
+
+@app.route("/api/librarian/loans", methods=["GET"])
+@jwt_required()
+def librarian_loans():
+    user, error = require_librarian()
+    if error: return error
+    q = (request.args.get("q") or "").strip()
+    status = (request.args.get("status") or "").strip().upper()
+    query = db.session.query(Loan).join(User, Loan.user_id == User.id).join(BookCopy).join(Book)
+    if status == "OVERDUE": query = query.filter(or_(Loan.status == LoanStatus.OVERDUE, (Loan.status == LoanStatus.BORROWED) & (Loan.due_at < datetime.utcnow())))
+    elif status == "ACTIVE": query = query.filter(Loan.status.in_((LoanStatus.BORROWED, LoanStatus.OVERDUE)))
+    elif status:
+        if status not in {item.value for item in LoanStatus}:
+            return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "Unknown loan status."}}), 422
+        query = query.filter(Loan.status == LoanStatus(status))
+    if q: query = query.filter(or_(User.name.ilike(f"%{q}%"), User.enrollment_id.ilike(f"%{q}%"), User.employee_id.ilike(f"%{q}%"), Book.title.ilike(f"%{q}%")))
+    loans = query.order_by(Loan.due_at.asc()).limit(500).all()
+    return jsonify({"status": "success", "data": [{"id": str(l.id), "book_title": l.book_copy.book.title, "borrower": l.user.name,
+        "user_id": l.user.enrollment_id if l.user.role == RoleType.STUDENT else l.user.employee_id, "issued_at": l.issued_at.isoformat(),
+        "due_at": l.due_at.isoformat(), "status": "OVERDUE" if l.status == LoanStatus.BORROWED and l.due_at < datetime.utcnow() else l.status.value,
+        "copy_id": str(l.book_copy.id), "accession_number": l.book_copy.accession_number} for l in loans]}), 200
+
+
+@app.route("/api/librarian/loans/<loan_id>/return", methods=["POST"])
+@jwt_required()
+def librarian_return_loan(loan_id):
+    librarian, error = require_librarian()
+    if error: return error
+    loan = db.session.get(Loan, loan_id)
+    if not loan: return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Loan not found."}}), 404
+    if loan.status not in {LoanStatus.BORROWED, LoanStatus.OVERDUE}:
+        return jsonify({"status": "error", "error": {"code": "INVALID_STATE", "message": "Only an active issued loan can be returned."}}), 409
+    try:
+        now = datetime.utcnow()
+        late = loan.due_at < now
+        loan.status = LoanStatus.RETURNED
+        loan.returned_at = now
+        loan.returned_to = librarian.id
+        loan.book_copy.status = CopyStatus.AVAILABLE
+        db.session.add(Notification(user_id=loan.user_id, type=NotificationType.SYSTEM, title="Book returned", message=f"{loan.book_copy.book.title} was returned successfully."))
+        db.session.commit()
+        return jsonify({"status": "success", "data": {"id": str(loan.id), "status": loan.status.value, "overdue_at_return": late, "returned_at": loan.returned_at.isoformat()}}), 200
+    except Exception:
+        db.session.rollback()
+        return jsonify({"status": "error", "error": {"code": "RETURN_FAILED", "message": "Unable to record book return."}}), 500
+
+
+@app.route("/api/librarian/suggestions", methods=["GET"])
+@jwt_required()
+def librarian_suggestions():
+    user, error = require_librarian()
+    if error: return error
+    q = (request.args.get("q") or "").strip()
+    status = (request.args.get("status") or "").strip().upper()
+    query = db.session.query(Suggestion)
+    if q: query = query.filter(Suggestion.title.ilike(f"%{q}%"))
+    if status:
+        if status not in {x.value for x in SuggestionStatus}: return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "Unknown suggestion status."}}), 422
+        query = query.filter(Suggestion.status == SuggestionStatus(status))
+    rows = query.order_by(Suggestion.created_at.desc()).limit(500).all()
+    return jsonify({"status": "success", "data": {"items": [{"id": str(s.id), "title": s.title, "author": s.author, "status": s.status.value,
+        "submitted_at": s.created_at.isoformat(), "requester": s.submitted_by_user.name, "requester_role": s.submitted_by_user.role.value,
+        "votes": db.session.query(func.count(SuggestionVote.user_id)).filter_by(suggestion_id=s.id).scalar() or 0} for s in rows]}}), 200
+
+
+@app.route("/api/librarian/suggestions/<suggestion_id>/review", methods=["POST"])
+@jwt_required()
+def librarian_review_suggestion(suggestion_id):
+    librarian, error = require_librarian()
+    if error: return error
+    suggestion = db.session.get(Suggestion, suggestion_id)
+    if not suggestion: return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Suggestion not found."}}), 404
+    data = request.get_json(silent=True) or {}
+    try: status = SuggestionStatus(str(data.get("status", "")).strip().upper())
+    except ValueError: return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "Choose a valid suggestion status."}}), 422
+    if status not in {SuggestionStatus.UNDER_REVIEW, SuggestionStatus.APPROVED, SuggestionStatus.REJECTED, SuggestionStatus.ORDERED, SuggestionStatus.AVAILABLE}:
+        return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "This review status is not permitted."}}), 422
+    suggestion.status, suggestion.reviewed_by, suggestion.reviewed_at = status, librarian.id, datetime.utcnow()
+    db.session.add(Notification(user_id=suggestion.submitted_by, type=NotificationType.SUGGESTION_STATUS_CHANGED, title="Suggestion updated", message=f"Your suggestion '{suggestion.title}' is now {status.value.replace('_', ' ').lower()}."))
+    db.session.commit()
+    return jsonify({"status": "success", "data": {"id": str(suggestion.id), "status": status.value, "reviewed_at": suggestion.reviewed_at.isoformat()}}), 200
+
+
+@app.route("/api/users/me/notifications", methods=["GET"])
+@jwt_required()
+def my_notifications():
+    user = authenticated_active_user()
+    if not user: return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    rows = db.session.query(Notification).filter_by(user_id=user.id).order_by(Notification.created_at.desc()).limit(100).all()
+    return jsonify({"status": "success", "data": {"unread": sum(not n.is_read for n in rows), "items": [{"id": str(n.id), "type": n.type.value, "title": n.title, "message": n.message, "is_read": n.is_read, "created_at": n.created_at.isoformat()} for n in rows]}}), 200
+
+
+@app.route("/api/users/me/notifications/<notification_id>/read", methods=["POST"])
+@jwt_required()
+def mark_notification_read(notification_id):
+    user = authenticated_active_user()
+    if not user: return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    notification = db.session.query(Notification).filter_by(id=notification_id, user_id=user.id).first()
+    if not notification: return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Notification not found."}}), 404
+    notification.is_read = True
+    db.session.commit()
+    return jsonify({"status": "success", "data": {"id": str(notification.id), "is_read": True}}), 200
 
 
 @app.route("/api/categories", methods=["GET"])

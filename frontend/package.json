@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test",
     "build": "vite build",
     "verify:virtual-grid": "node scripts/verify-virtual-grid.mjs",
     "preview": "vite preview"

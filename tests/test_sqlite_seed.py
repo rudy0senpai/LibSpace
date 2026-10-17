@@ -282,6 +282,98 @@ class SQLiteSeedTests(unittest.TestCase):
                 self.assertEqual(restored.status_code, 200)
                 self.assertEqual(restored.get_json()["data"]["role"], role.value)
 
+    def test_librarian_can_return_borrowed_loan_transactionally_and_duplicate_is_rejected(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        loan = backend.db.session.query(Loan).filter(Loan.status == LoanStatus.BORROWED).first()
+        self.assertIsNotNone(loan)
+        loan_id = str(loan.id)
+        response = client.post(f"/api/librarian/loans/{loan_id}/return", headers=headers)
+        self.assertEqual(response.status_code, 200, response.get_json())
+        backend.db.session.expire_all()
+        saved = backend.db.session.get(Loan, loan_id)
+        self.assertEqual(saved.status, LoanStatus.RETURNED)
+        self.assertIsNotNone(saved.returned_at)
+        self.assertEqual(saved.returned_to, backend.db.session.query(User).filter_by(name="Sphere").one().id)
+        self.assertEqual(saved.book_copy.status, CopyStatus.AVAILABLE)
+        duplicate = client.post(f"/api/librarian/loans/{loan_id}/return", headers=headers)
+        self.assertEqual(duplicate.status_code, 409)
+
+    def test_librarian_return_route_forbidden_to_student(self):
+        client = backend.app.test_client()
+        student = client.post("/api/auth/login", json={"name": "Urvashi", "user_id": "25EMCAD016", "role": "STUDENT"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {student['access_token']}"}
+        loan = backend.db.session.query(Loan).filter(Loan.status == LoanStatus.BORROWED).first()
+        response = client.post(f"/api/librarian/loans/{loan.id}/return", headers=headers)
+        self.assertEqual(response.status_code, 403)
+
+    def test_librarian_can_list_and_review_suggestions(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        listed = client.get("/api/librarian/suggestions?q=Clean", headers=headers)
+        self.assertEqual(listed.status_code, 200, listed.get_json())
+        first = listed.get_json()["data"]["items"][0]
+        reviewed = client.post(f"/api/librarian/suggestions/{first['id']}/review", headers=headers, json={"status": "UNDER_REVIEW"})
+        self.assertEqual(reviewed.status_code, 200, reviewed.get_json())
+        backend.db.session.expire_all()
+        saved = backend.db.session.get(Suggestion, first["id"])
+        self.assertEqual(saved.status, __import__("models").SuggestionStatus.UNDER_REVIEW)
+        self.assertIsNotNone(saved.reviewed_at)
+
+    def test_user_can_read_and_mark_only_own_notifications(self):
+        client = backend.app.test_client()
+        student = client.post("/api/auth/login", json={"name": "Urvashi", "user_id": "25EMCAD016", "role": "STUDENT"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {student['access_token']}"}
+        listed = client.get("/api/users/me/notifications", headers=headers)
+        self.assertEqual(listed.status_code, 200, listed.get_json())
+        rows = listed.get_json()["data"]["items"]
+        self.assertTrue(rows)
+        notification_id = rows[0]["id"]
+        marked = client.post(f"/api/users/me/notifications/{notification_id}/read", headers=headers)
+        self.assertEqual(marked.status_code, 200, marked.get_json())
+        other = client.post("/api/auth/login", json={"name": "Dhruv", "user_id": "25DMCAD016", "role": "DEPARTMENT"}).get_json()["data"]
+        forbidden = client.post(f"/api/users/me/notifications/{notification_id}/read", headers={"Authorization": f"Bearer {other['access_token']}"})
+        self.assertEqual(forbidden.status_code, 404)
+
+    def test_librarian_catalogue_create_edit_and_copy_management(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        invalid = client.post("/api/librarian/catalogue", headers=headers, json={"title": "Bad ISBN", "isbn": "9780306406158"})
+        self.assertEqual(invalid.status_code, 422)
+        publisher_name = backend.db.session.query(Publisher).first().name
+        category_name = backend.db.session.query(Category).first().name
+        created = client.post("/api/librarian/catalogue", headers=headers, json={"title": "Test catalogue entry", "isbn": "978-0-306-40615-7", "authors": ["Test Author"], "publisher": publisher_name, "category": category_name, "publication_year": 2001})
+        self.assertEqual(created.status_code, 201, created.get_json())
+        book_id = created.get_json()["data"]["id"]
+        try:
+            duplicate = client.post("/api/librarian/catalogue", headers=headers, json={"title": "Duplicate", "isbn": "9780306406157"})
+            self.assertEqual(duplicate.status_code, 409)
+            edited = client.patch(f"/api/librarian/catalogue/{book_id}", headers=headers, json={"title": "Edited catalogue entry"})
+            self.assertEqual(edited.status_code, 200)
+            copy = client.post(f"/api/librarian/catalogue/{book_id}/copies", headers=headers, json={"accession_number": "TEST-ACC-1", "barcode": "TEST-BAR-1", "rack": "R1", "shelf": "S1"})
+            self.assertEqual(copy.status_code, 201, copy.get_json())
+            listing = client.get("/api/librarian/catalogue?q=Edited", headers=headers)
+            self.assertEqual(listing.status_code, 200)
+            self.assertEqual(listing.get_json()["data"]["items"][0]["copies"][0]["status"], "AVAILABLE")
+            self.assertEqual(listing.get_json()["data"]["items"][0]["publisher"], publisher_name)
+            self.assertEqual(listing.get_json()["data"]["items"][0]["category"], category_name)
+        finally:
+            book = backend.db.session.get(Book, book_id)
+            if book:
+                backend.db.session.query(BookCopy).filter_by(book_id=book.id).delete()
+                backend.db.session.delete(book)
+                backend.db.session.commit()
+
+    def test_catalogue_admin_routes_reject_students(self):
+        client = backend.app.test_client()
+        student = client.post("/api/auth/login", json={"name": "Urvashi", "user_id": "25EMCAD016", "role": "STUDENT"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {student['access_token']}"}
+        response = client.get("/api/librarian/catalogue", headers=headers)
+        self.assertEqual(response.status_code, 403)
+
     def test_testing_login_casefolds_and_trims_identity_without_rewriting_display_name(self):
         client = backend.app.test_client()
         response = client.post("/api/auth/login", json={

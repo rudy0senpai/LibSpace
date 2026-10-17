@@ -57,6 +57,49 @@ export async function issueApprovedLoan(loanId) {
   return fetchWithAuth(`/api/librarian/loan-requests/${loanId}/issue`, { method: 'POST' });
 }
 
+export async function getLibrarianCatalogue(params = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== ''));
+  return fetchWithAuth(`/api/librarian/catalogue?${query}`);
+}
+
+export async function createCatalogueBook(data) {
+  return fetchWithAuth('/api/librarian/catalogue', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateCatalogueBook(id, data) {
+  return fetchWithAuth(`/api/librarian/catalogue/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function addCatalogueCopy(id, data) {
+  return fetchWithAuth(`/api/librarian/catalogue/${encodeURIComponent(id)}/copies`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function getLibrarianLoans(params = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== ''));
+  return fetchWithAuth(`/api/librarian/loans?${query}`);
+}
+
+export async function returnLibrarianLoan(id) {
+  return fetchWithAuth(`/api/librarian/loans/${encodeURIComponent(id)}/return`, { method: 'POST' });
+}
+
+export async function getLibrarianSuggestions(params = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== ''));
+  return fetchWithAuth(`/api/librarian/suggestions?${query}`);
+}
+
+export async function reviewLibrarianSuggestion(id, status) {
+  return fetchWithAuth(`/api/librarian/suggestions/${encodeURIComponent(id)}/review`, { method: 'POST', body: JSON.stringify({ status }) });
+}
+
+export async function getMyNotifications() {
+  return fetchWithAuth('/api/users/me/notifications');
+}
+
+export async function markMyNotificationRead(id) {
+  return fetchWithAuth(`/api/users/me/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' });
+}
+
 export async function getMySuggestions() {
   return fetchWithAuth('/api/users/me/suggestions');
 }
