@@ -14,7 +14,8 @@ from werkzeug.security import check_password_hash
 from werkzeug.exceptions import HTTPException
 
 from config import Config
-from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author, Publisher, Notification, NotificationType, AuditLog
+from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author, Publisher, Notification, NotificationType, AuditLog, CoverLookupCache
+from cover_service import cover_service
 from identity import canonicalize_name, canonicalize_role, canonicalize_user_id
 
 BACKEND_INSTANCE_DIR = Path(__file__).resolve().parent / "instance"
@@ -888,6 +889,13 @@ def search_books():
                 "available": avail,
                 "total": len(copies),
                 "rack": copies[0].rack if copies else "",
+                "shelf": copies[0].shelf if copies else "",
+                "description": book.description or "",
+                "publication_year": book.publication_year,
+                "edition": book.edition or "",
+                "language": book.language or "",
+                "publisher": book.publisher.name if book.publisher else "",
+                "cover_image_ref": book.cover_image_ref or "",
             })
 
         return jsonify({
@@ -903,6 +911,30 @@ def search_books():
         db.session.rollback()
         app.logger.exception("Book search failed")
         return jsonify({"status": "error", "error": {"code": "SEARCH_FAILED", "message": "Unable to search the catalogue."}}), 500
+
+
+@app.route("/api/books/<book_id>/cover", methods=["GET"])
+@jwt_required()
+def book_cover_lookup(book_id):
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    try:
+        canonical_book_id = str(uuid.UUID(book_id))
+    except (ValueError, AttributeError):
+        return jsonify({"status": "error", "error": {"code": "BOOK_NOT_FOUND", "message": "Book was not found."}}), 404
+    book = db.session.get(Book, canonical_book_id)
+    if not book:
+        return jsonify({"status": "error", "error": {"code": "BOOK_NOT_FOUND", "message": "Book was not found."}}), 404
+    refresh = request.args.get("refresh", "").strip().lower() in {"1", "true", "yes"}
+    if refresh and user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
+        return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Only library staff can refresh a cached cover lookup."}}), 403
+    result = cover_service.lookup(book, db.session, CoverLookupCache, refresh=refresh)
+    return jsonify({"status": "success", "data": {
+        "book_id": str(book.id), "cover_url": result.get("cover_url"),
+        "source": result.get("source"), "matched": bool(result.get("matched")),
+        "cached": bool(result.get("cached")),
+    }}), 200
 
 
 def serialize_loan_record(loan):

@@ -27,17 +27,9 @@ export async function lookupBookMetadata(isbn, { fetchImpl = fetch, timeout = ti
         published_date: volume.publishedDate || null, description: volume.description || null,
         categories: Array.isArray(volume.categories) ? volume.categories : [],
         page_count: Number.isInteger(volume.pageCount) ? volume.pageCount : null,
-        isbn: normalized, cover_url: volume.imageLinks?.thumbnail?.replace(/^http:/, 'https:') || null,
-        attribution: 'Metadata and cover information from Google Books.'
+        attribution: 'Book metadata from Google Books.'
       };
     } catch { /* continue with Open Library cover fallback */ }
-    if (!google?.cover_url) {
-      const url = `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(normalized)}-L.jpg?default=false`;
-      try {
-        const response = await fetchImpl(url, { method: 'HEAD', signal: AbortSignal.timeout(timeout) });
-        if (response.ok) google = { ...(google || { isbn: normalized }), cover_url: url, attribution: 'Cover from Open Library.' };
-      } catch { /* no cover available */ }
-    }
     return google;
   })();
   cache.set(normalized, task);

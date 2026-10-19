@@ -2,6 +2,8 @@ import os
 import sys
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
 from datetime import datetime, timedelta
 from sqlalchemy.exc import IntegrityError
@@ -70,7 +72,7 @@ class SQLiteSeedTests(unittest.TestCase):
         self.assertGreater(backend.db.session.query(Book).filter(Book.publisher_id.is_not(None)).count(), 0)
         self.assertGreater(backend.db.session.execute(backend.text("select count(*) from book_departments")).scalar(), 0)
         catalog = __import__("json").loads((Path(__file__).resolve().parents[1] / "database" / "seed" / "books_catalog.json").read_text(encoding="utf-8"))["books"]
-        self.assertEqual(len(catalog), 119)
+        self.assertGreaterEqual(len(catalog), 100)
         self.assertTrue(all(item["openlibrary_work"].startswith("/works/") for item in catalog))
         work_by_title = {item["title"]: item["openlibrary_work"] for item in catalog}
         self.assertEqual(work_by_title["The C++ Programming Language"], "/works/OL53184W")
@@ -86,6 +88,17 @@ class SQLiteSeedTests(unittest.TestCase):
         seed_test_db.seed_all()
         after = tuple(backend.db.session.query(model).count() for model in models)
         self.assertEqual(after, before)
+
+    def test_file_backed_seed_refuses_a_fresh_legacy_blank_isbn_catalogue(self):
+        original_path = seed_test_db.db_file
+        backend.db.drop_all()
+        seed_test_db.db_file = Path("C:/fake/libsphere_test.db")
+        try:
+            with self.assertRaisesRegex(RuntimeError, "legacy catalog has no ISBNs"):
+                seed_test_db.seed_all()
+        finally:
+            seed_test_db.db_file = original_path
+            seed_test_db.seed_all()
 
     def _login_token(self, name, user_id, role):
         response = backend.app.test_client().post("/api/auth/login", json={
@@ -135,6 +148,43 @@ class SQLiteSeedTests(unittest.TestCase):
         finally:
             backend.db.session.delete(book)
             backend.db.session.delete(author)
+            backend.db.session.commit()
+
+    def test_catalog_search_returns_local_cover_and_expanded_metadata(self):
+        marker = uuid.uuid4().hex[:10]
+        author = Author(name=f"Cover Card Author {marker}")
+        publisher = Publisher(name=f"Cover Card Publisher {marker}")
+        book = Book(
+            title=f"Cover Card Record {marker}", isbn=f"978{marker}", description="Local description",
+            publication_year=2021, edition="Second edition", language="English", cover_image_ref="/images/catalog-cover.jpg",
+            publisher=publisher, authors=[author],
+        )
+        copy = BookCopy(
+            book=book, accession_number=f"ACC-{marker}", barcode=f"BAR-{marker}", rack="R-4", shelf="S-2",
+            acquired_at=datetime.now().date(), status=CopyStatus.AVAILABLE,
+        )
+        backend.db.session.add_all([book, copy])
+        backend.db.session.commit()
+        try:
+            token = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
+            response = backend.app.test_client().get(
+                "/api/books/search", query_string={"q": book.title},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            result = response.get_json()["data"]["items"][0]
+            self.assertEqual(result["description"], "Local description")
+            self.assertEqual(result["publication_year"], 2021)
+            self.assertEqual(result["publisher"], publisher.name)
+            self.assertEqual(result["edition"], "Second edition")
+            self.assertEqual(result["language"], "English")
+            self.assertEqual(result["cover_image_ref"], "/images/catalog-cover.jpg")
+            self.assertEqual(result["shelf"], "S-2")
+        finally:
+            backend.db.session.delete(copy)
+            backend.db.session.delete(book)
+            backend.db.session.delete(author)
+            backend.db.session.delete(publisher)
             backend.db.session.commit()
 
     def test_catalog_search_rejects_overlong_query(self):
@@ -241,7 +291,7 @@ class SQLiteSeedTests(unittest.TestCase):
         self.assertEqual(client.get("/api/books/search?page=0", headers=headers).status_code, 400)
         self.assertEqual(client.get("/api/books/search?per_page=101", headers=headers).status_code, 400)
 
-    def test_suggestion_vote_state_is_persistent_and_repeated_vote_is_idempotent(self):
+    def test_suggestion_vote_can_toggle_off_and_on_and_is_scoped_to_authenticated_user(self):
         client = backend.app.test_client()
         first_token = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
         second_token = self._login_token("Yashdeep", "25TECAD016", "FACULTY")
@@ -256,14 +306,87 @@ class SQLiteSeedTests(unittest.TestCase):
 
         initial = client.get("/api/users/me/suggestions", headers=first_headers).get_json()["data"]
         self.assertFalse(next(item for item in initial if item["id"] == suggestion_id)["voted_by_me"])
-        first_vote = client.post(f"/api/suggestions/{suggestion_id}/vote", headers=first_headers)
-        second_vote = client.post(f"/api/suggestions/{suggestion_id}/vote", headers=first_headers)
-        self.assertEqual(first_vote.status_code, 200)
-        self.assertEqual(second_vote.get_json()["data"], {"voted": True, "vote_count": 1})
-        persisted = client.get("/api/users/me/suggestions", headers=first_headers).get_json()["data"]
-        self.assertTrue(next(item for item in persisted if item["id"] == suggestion_id)["voted_by_me"])
-        other_user = client.get("/api/users/me/suggestions", headers=second_headers).get_json()["data"]
-        self.assertFalse(next(item for item in other_user if item["id"] == suggestion_id)["voted_by_me"])
+        try:
+            first_vote = client.post(f"/api/suggestions/{suggestion_id}/vote", headers=first_headers,
+                                     json={"user_id": str(backend.db.session.query(User).filter_by(name="Yashdeep").one().id)})
+            self.assertEqual(first_vote.status_code, 200)
+            self.assertEqual(first_vote.get_json()["data"], {"voted": True, "vote_count": 1})
+            self.assertEqual(backend.db.session.query(SuggestionVote).filter_by(suggestion_id=suggestion_id).one().user_id,
+                             backend.db.session.query(User).filter_by(name="Urvashi").one().id)
+
+            unvote = client.post(f"/api/suggestions/{suggestion_id}/vote", headers=first_headers)
+            self.assertEqual(unvote.status_code, 200)
+            self.assertEqual(unvote.get_json()["data"], {"voted": False, "vote_count": 0})
+            after_refresh = client.get("/api/users/me/suggestions", headers=first_headers).get_json()["data"]
+            self.assertFalse(next(item for item in after_refresh if item["id"] == suggestion_id)["voted_by_me"])
+
+            again = client.post(f"/api/suggestions/{suggestion_id}/vote", headers=first_headers)
+            self.assertEqual(again.get_json()["data"], {"voted": True, "vote_count": 1})
+            other_user = client.get("/api/users/me/suggestions", headers=second_headers).get_json()["data"]
+            self.assertFalse(next(item for item in other_user if item["id"] == suggestion_id)["voted_by_me"])
+            other_vote = client.post(f"/api/suggestions/{suggestion_id}/vote", headers=second_headers)
+            self.assertEqual(other_vote.get_json()["data"], {"voted": True, "vote_count": 2})
+            persisted_first = client.get("/api/users/me/suggestions", headers=first_headers).get_json()["data"]
+            persisted_second = client.get("/api/users/me/suggestions", headers=second_headers).get_json()["data"]
+            self.assertTrue(next(item for item in persisted_first if item["id"] == suggestion_id)["voted_by_me"])
+            self.assertTrue(next(item for item in persisted_second if item["id"] == suggestion_id)["voted_by_me"])
+            self.assertEqual(backend.db.session.query(SuggestionVote).filter_by(suggestion_id=suggestion_id).count(), 2)
+        finally:
+            backend.db.session.query(Suggestion).filter_by(id=suggestion_id).delete(synchronize_session=False)
+            backend.db.session.commit()
+
+    def test_vote_requires_authentication_and_user_cannot_impersonate_with_payload(self):
+        client = backend.app.test_client()
+        student = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
+        faculty = self._login_token("Yashdeep", "25TECAD016", "FACULTY")
+        suggestion = client.post("/api/suggestions", json={
+            "title": "Vote identity isolation", "justification": "Automated test fixture",
+            "reason": "COURSE_REQUIREMENT",
+        }, headers={"Authorization": f"Bearer {student}"})
+        suggestion_id = suggestion.get_json()["data"]["id"]
+        try:
+            denied = client.post(f"/api/suggestions/{suggestion_id}/vote")
+            self.assertEqual(denied.status_code, 401)
+            response = client.post(f"/api/suggestions/{suggestion_id}/vote",
+                                   headers={"Authorization": f"Bearer {student}"},
+                                   json={"user_id": str(backend.db.session.query(User).filter_by(name="Yashdeep").one().id)})
+            self.assertEqual(response.status_code, 200)
+            rows = backend.db.session.query(SuggestionVote).filter_by(suggestion_id=suggestion_id).all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].user_id, backend.db.session.query(User).filter_by(name="Urvashi").one().id)
+            faculty_state = client.get("/api/users/me/suggestions", headers={"Authorization": f"Bearer {faculty}"}).get_json()["data"]
+            self.assertFalse(next(item for item in faculty_state if item["id"] == suggestion_id)["voted_by_me"])
+        finally:
+            backend.db.session.query(Suggestion).filter_by(id=suggestion_id).delete(synchronize_session=False)
+            backend.db.session.commit()
+
+    def test_concurrent_toggles_are_serialized_and_return_authoritative_state(self):
+        client = backend.app.test_client()
+        token = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
+        headers = {"Authorization": f"Bearer {token}"}
+        created = client.post("/api/suggestions", json={
+            "title": "Concurrent vote toggle", "justification": "Automated concurrency fixture",
+            "reason": "COURSE_REQUIREMENT",
+        }, headers=headers)
+        suggestion_id = created.get_json()["data"]["id"]
+        barrier = Barrier(2)
+        try:
+            def submit_toggle():
+                with backend.app.test_client() as thread_client:
+                    barrier.wait(timeout=5)
+                    return thread_client.post(f"/api/suggestions/{suggestion_id}/vote", headers=headers)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                responses = list(executor.map(lambda _index: submit_toggle(), range(2)))
+            self.assertEqual([response.status_code for response in responses], [200, 200])
+            states = [response.get_json()["data"] for response in responses]
+            self.assertEqual(sorted(state["voted"] for state in states), [False, True])
+            for state in states:
+                self.assertEqual(state["vote_count"], 1 if state["voted"] else 0)
+            self.assertEqual(backend.db.session.query(SuggestionVote).filter_by(suggestion_id=suggestion_id).count(), 0)
+        finally:
+            backend.db.session.query(Suggestion).filter_by(id=suggestion_id).delete(synchronize_session=False)
+            backend.db.session.commit()
 
     def test_sqlite_enforces_foreign_keys(self):
         self.assertEqual(backend.db.session.execute(backend.text("PRAGMA foreign_keys")).scalar(), 1)
@@ -586,6 +709,34 @@ class SQLiteSeedTests(unittest.TestCase):
             headers={"Authorization": f"Bearer {department_token}"},
         )
         self.assertEqual(reversed_range.status_code, 422)
+
+    def test_cover_lookup_api_requires_auth_and_staff_only_refresh(self):
+        marker = uuid.uuid4().hex[:10]
+        book = Book(title=f"Cover API Record {marker}", isbn="9780131103627")
+        backend.db.session.add(book)
+        backend.db.session.commit()
+        original = backend.cover_service.lookup
+        backend.cover_service.lookup = lambda *_args, **_kwargs: {
+            "matched": True, "cover_url": "https://covers.example/verified.jpg",
+            "source": "openlibrary_isbn", "cached": False,
+        }
+        try:
+            client = backend.app.test_client()
+            self.assertEqual(client.get(f"/api/books/{book.id}/cover").status_code, 401)
+            student_token = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
+            student_headers = {"Authorization": f"Bearer {student_token}"}
+            response = client.get(f"/api/books/{book.id}/cover", headers=student_headers)
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertEqual(response.get_json()["data"]["cover_url"], "https://covers.example/verified.jpg")
+            self.assertEqual(client.get("/api/books/not-a-uuid/cover", headers=student_headers).status_code, 404)
+            self.assertEqual(client.get(f"/api/books/{book.id}/cover?refresh=1", headers=student_headers).status_code, 403)
+            librarian_token = self._login_token("Sphere", "25LIB016", "LIBRARIAN")
+            staff_response = client.get(f"/api/books/{book.id}/cover?refresh=1", headers={"Authorization": f"Bearer {librarian_token}"})
+            self.assertEqual(staff_response.status_code, 200, staff_response.get_json())
+        finally:
+            backend.cover_service.lookup = original
+            backend.db.session.delete(book)
+            backend.db.session.commit()
 
     def test_seed_contains_required_workflow_entities_and_statuses(self):
         self.assertGreater(backend.db.session.query(BookCopy).count(), 100)

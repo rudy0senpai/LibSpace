@@ -1,55 +1,109 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getVirtualBookGridLayout, VIRTUAL_GRID_GAP } from './virtualBookGridLayout';
 
-const ROW_HEIGHT = 250;
 const VIEWPORT_HEIGHT = 600;
 const OVERSCAN = 2;
 
+const firstRowAfterOffset = (layout, offset) => {
+  let low = 0;
+  let high = layout.rowHeights.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (layout.rowTops[middle] + layout.rowHeights[middle] <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+};
+
 export default function VirtualBookGrid({ items, renderItem }) {
-  const viewportRef = useRef(null);
+  const canvasRef = useRef(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(VIEWPORT_HEIGHT);
+  const [expandedItems, setExpandedItems] = useState({});
 
   useEffect(() => {
-    const element = viewportRef.current;
-    if (!element) return undefined;
+    setExpandedItems({});
+  }, [items]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const updatePosition = () => setScrollTop(window.scrollY || document.documentElement.scrollTop || 0);
     const measure = () => {
-      setWidth(element.clientWidth || 1000);
-      setHeight(element.clientHeight || VIEWPORT_HEIGHT);
+      setWidth(canvas.clientWidth || 1000);
+      setHeight(window.innerHeight || VIEWPORT_HEIGHT);
+      updatePosition();
     };
     measure();
+    window.addEventListener('scroll', updatePosition, { passive: true });
+    window.addEventListener('resize', measure);
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
-    observer?.observe(element);
-    return () => observer?.disconnect();
+    observer?.observe(canvas);
+    return () => {
+      window.removeEventListener('scroll', updatePosition);
+      window.removeEventListener('resize', measure);
+      observer?.disconnect();
+    };
   }, []);
 
-  const columns = width < 620 ? 1 : width < 960 ? 2 : 3;
-  const totalRows = Math.ceil(items.length / columns);
+  const baseLayout = useMemo(() => getVirtualBookGridLayout(width, items.length), [width, items.length]);
+  const expandedRows = useMemo(() => Object.keys(expandedItems).reduce((rows, index) => {
+    if (expandedItems[index]) rows[Math.floor(Number(index) / baseLayout.columns)] = true;
+    return rows;
+  }, {}), [baseLayout.columns, expandedItems]);
+  const layout = useMemo(
+    () => getVirtualBookGridLayout(width, items.length, expandedRows),
+    [expandedRows, items.length, width],
+  );
+  const setItemExpanded = useCallback((index, expanded) => {
+    setExpandedItems(current => {
+      if (Boolean(current[index]) === expanded) return current;
+      const next = { ...current };
+      if (expanded) next[index] = true;
+      else delete next[index];
+      return next;
+    });
+  }, []);
+
+  const canvasTop = canvasRef.current && typeof window !== 'undefined'
+    ? canvasRef.current.getBoundingClientRect().top + window.scrollY
+    : 0;
+  const visibleTop = Math.max(0, scrollTop - canvasTop);
   const range = useMemo(() => {
-    const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-    const last = Math.min(totalRows, Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN);
+    const firstVisible = firstRowAfterOffset(layout, visibleTop);
+    const afterLastVisible = firstRowAfterOffset(layout, visibleTop + height);
+    const first = Math.max(0, firstVisible - OVERSCAN);
+    const last = Math.min(layout.rowHeights.length, afterLastVisible + OVERSCAN + 1);
     return { first, last };
-  }, [height, scrollTop, totalRows]);
+  }, [height, layout, visibleTop]);
 
   return (
     <div
-      ref={viewportRef}
+      ref={canvasRef}
       className="virtual-book-viewport"
       role="list"
       aria-label="Book search results"
-      onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
     >
-      <div className="virtual-book-spacer" style={{ height: totalRows * ROW_HEIGHT }}>
-        {Array.from({ length: range.last - range.first }, (_, offset) => {
+      <div className="virtual-book-spacer" style={{ height: layout.spacerHeight }}>
+        {Array.from({ length: Math.max(0, range.last - range.first) }, (_, offset) => {
           const row = range.first + offset;
-          const start = row * columns;
+          const start = row * layout.columns;
+          const rowHeight = layout.rowHeights[row] - VIRTUAL_GRID_GAP;
           return (
             <div
               className="virtual-book-row"
               key={`row-${row}`}
-              style={{ top: row * ROW_HEIGHT, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+              style={{
+                top: layout.rowTops[row],
+                height: rowHeight,
+                gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
+              }}
             >
-              {items.slice(start, start + columns).map((item, column) => renderItem(item, start + column, items.length))}
+              {items.slice(start, start + layout.columns).map((item, column) => {
+                const index = start + column;
+                return renderItem(item, index, items.length, expanded => setItemExpanded(index, expanded), Boolean(expandedItems[index]));
+              })}
             </div>
           );
         })}

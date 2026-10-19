@@ -455,11 +455,8 @@
 }
 
 .virtual-book-viewport {
-    height: 600px;
-    max-height: 70vh;
-    overflow: auto;
     margin-top: 16px;
-    overscroll-behavior: contain;
+    width: 100%;
 }
 
 .virtual-book-spacer { position: relative; width: 100%; }
@@ -468,12 +465,6 @@
     inset-inline: 0;
     display: grid;
     gap: 16px;
-    height: 234px;
-}
-.virtual-book-row .prototype-book-card {
-    box-sizing: border-box;
-    height: 234px;
-    overflow: hidden;
 }
 .prototype-book-card button:disabled { opacity: .55; cursor: not-allowed; }
 .prototype-search select { max-width: 180px; min-width: 120px; }

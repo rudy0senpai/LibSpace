@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Search, X, LoaderCircle, BookOpen, UsersRound } from 'lucide-react';
-import { searchBooks, getLibrarianUsers } from '../../services/api';
+import { searchBooks, getLibrarianUsers, lookupBookCover } from '../../services/api';
 import { lookupBookMetadata } from '../../services/metadataService';
 
 export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
@@ -14,18 +14,21 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [metadata, setMetadata] = useState(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
-  const [coverFailed, setCoverFailed] = useState(false);
+  const [coverStage, setCoverStage] = useState(0);
   const rootRef = useRef(null);
 
   useEffect(() => {
-    let current = true;
     const book = selected?.type === 'book' ? selected.item : null;
-    setCoverFailed(false);
-    if (!book?.isbn || book.description) { setMetadata(null); return undefined; }
+    if (!book || (book.cover_image_ref && coverStage === 0) || coverStage > 0) { setMetadata(null); return undefined; }
+    let current = true;
     setMetadataLoading(true);
-    lookupBookMetadata(book.isbn).then(value => { if (current) setMetadata(value); }).finally(() => { if (current) setMetadataLoading(false); });
+    const detailsPromise = book.isbn ? lookupBookMetadata(book.isbn) : Promise.resolve(null);
+    const coverPromise = book.id ? lookupBookCover(book.id).catch(() => null) : Promise.resolve(null);
+    Promise.all([detailsPromise, coverPromise]).then(([details, coverResult]) => {
+      if (current) setMetadata({ ...(details || {}), cover_url: coverResult?.data?.cover_url || null, source: coverResult?.data?.source || null });
+    }).finally(() => { if (current) setMetadataLoading(false); });
     return () => { current = false; };
-  }, [selected]);
+  }, [coverStage, selected]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -79,10 +82,15 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
   const selectResult = index => {
     const entry = selectableResults[index];
     if (entry) {
+      setCoverStage(0);
       setSelected(entry);
       setActiveIndex(index);
     }
   };
+  const selectedBook = selected?.type === 'book' ? selected.item : null;
+  const selectedCover = selectedBook
+    ? coverStage === 0 ? selectedBook.cover_image_ref || metadata?.cover_url : ''
+    : '';
   return (
     <div className="global-search" ref={rootRef}>
       <Search size={17} aria-hidden="true" />
@@ -140,10 +148,10 @@ export default function GlobalSearch({ role, onOpenCatalogue, onOpenUsers }) {
           </div>
           {selected && <div className="dashboard-search-detail" aria-live="polite">
             {selected.type === 'book' ? <>
-              {metadata?.cover_url && !coverFailed ? <img src={metadata.cover_url} alt={`Cover of ${selected.item.title}`} className="dashboard-book-cover" loading="lazy" onError={() => setCoverFailed(true)} /> : <div className="dashboard-book-cover-placeholder" role="img" aria-label={`No cover available for ${selected.item.title}`}><BookOpen size={22} /><span>Cover unavailable</span></div>}
+              {selectedCover ? <img src={selectedCover} alt={`Cover of ${selected.item.title}`} className="dashboard-book-cover" loading="lazy" onError={() => setCoverStage(stage => stage === 0 ? 1 : 2)} /> : <div className="dashboard-book-cover-placeholder" role="img" aria-label={`No cover available for ${selected.item.title}`}><BookOpen size={22} /><span>{metadataLoading ? 'Checking cover…' : 'Cover unavailable'}</span></div>}
               <b>{selected.item.title}</b><span>{selected.item.author || metadata?.authors?.join(', ') || 'Author unavailable'} · {selected.item.isbn || 'No ISBN listed'}</span>
               <small>{selected.item.available} of {selected.item.total} copies available · Rack {selected.item.rack || 'not listed'}</small>
-              {(metadataLoading || metadata?.description) && <small>{metadataLoading ? 'Checking publisher metadata…' : metadata.description}</small>}
+              {(metadataLoading || selected.item.description || metadata?.description) && <small>{metadataLoading ? 'Checking publisher metadata…' : selected.item.description || metadata.description}</small>}
               {metadata?.attribution && <small>{metadata.attribution}</small>}
               {onOpenCatalogue && <button type="button" onClick={() => { onOpenCatalogue(selected.item.title); setOpen(false); }}>Open catalogue results</button>}
             </> : <>

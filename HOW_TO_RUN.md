@@ -131,11 +131,12 @@ The local Flask server is the development server, and Vite's `dev` command is a 
 
 Use only a disposable/local development machine. Testing mode accepts a seeded **name + user ID + role** and does not verify identity or require a password. It must never be enabled in production.
 
-### Optional first-time seed (writes the testing database)
+### Legacy test seeder safety gate
 
-The persistent test database path is `backend/instance/libsphere_test.db`; with the relative SQLAlchemy URL its setting is `sqlite:///libsphere_test.db`. The seeder creates tables and inserts/updates demo records. It is repeatable and does not reset/delete existing data by default, but it **does write/update rows**. Do not run it if you need a strictly read-only start. It rejects non-SQLite URLs and limits the selected database file to `backend/instance/`.
+The checked-in `database/seed/books_catalog.json` has blank ISBNs and is retained only for isolated in-memory automated fixtures. The file-backed `backend/seed_test_db.py` path will not create or update records from that legacy blank-ISBN catalogue: it returns without row writes when a sufficiently seeded DB already exists and refuses a fresh file-backed DB if fewer than 12 legacy titles are present. The seeder may still call `db.create_all()` and create its index before the guard, but it does not reset or overwrite profiles/history. A fresh persistent test DB needs a separately reviewed ISBN-backed seed source; the 1,000-book academic import creates bibliographic records only and intentionally does not invent physical copies. Do not use `--reset` or the old no-ISBN importer to bypass the guard.
 
-Only if the testing database is new or missing its seeded demo data, and you intend to write the local test DB, run once from the repository root:
+The command below is retained only for an already-populated local test DB and returns without row changes for file-backed databases; use it only when you understand that safety gate:
+
 
 ```powershell
 $python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
@@ -145,7 +146,7 @@ $env:TEST_DATABASE_URL = 'sqlite:///libsphere_test.db'
 Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue
 ```
 
-The seeder creates the schema and adds/upserts the testing cohort, catalog, copies, sample workflow records, notifications, and audit events. The explicit `--reset` option deletes the configured SQLite file plus its WAL/SHM sidecars before seeding; **do not use `--reset` for routine setup**. Do not run the legacy `backend/seed_db.py` for this mode. The startup script `scripts/run_backend.ps1` invokes the testing seeder each time it is run (and runs pip install each time); it does not pass `--reset`, but it may upsert demo data. If you want to avoid database writes after initial seeding, use the manual backend startup below instead.
+The in-memory seeder builds role/circulation fixtures for automated tests. On a file-backed path the legacy blank-ISBN fixture is gated and not upserted; the existing persistent database retains its current users, books, copies, loans, reservations, suggestions, notifications, and audit rows. The explicit `--reset` option still deletes the configured SQLite file plus WAL/SHM sidecars and is unsafe as a workaround; do not use it to bypass the seeding guard. `scripts/run_backend.ps1` invokes the file-backed seeder, which is a no-op for an already populated test database and refuses a fresh one whose catalog source is blank ISBN.
 
 ### Start the backend
 
@@ -210,11 +211,143 @@ A valid test login returns an access token and user data; the authenticated cata
 
 From the repository root:
 
-- `scripts/run_backend.ps1` is a **testing-mode** launcher. It removes `PYTHONPATH`, creates the venv if missing, runs pip install, sets testing/SQLite/CORS/ephemeral JWT settings, calls `backend/seed_test_db.py`, then starts Flask. Because it seeds on every launch, prefer the manual backend command above for data-preserving daily restarts. It does not use `--reset`.
+- `scripts/run_backend.ps1` is a testing-mode launcher. It removes `PYTHONPATH`, creates the venv if missing, installs backend requirements, selects SQLite/testing/CORS/ephemeral JWT settings, and starts Flask without running a seeder. It requires the existing `backend/instance/libsphere_test.db`; a missing file fails closed because the legacy blank-ISBN seed catalog is not a safe fresh persistent source.
 - `scripts/run_frontend.ps1` sets `VITE_API_URL=http://localhost:5001`, `VITE_AUTH_MODE=testing`, installs frontend dependencies with `npm install` only if `frontend/node_modules` is missing, and starts Vite at port 5173. This is a testing-mode launcher, not a normal-mode launcher.
 - No separate normal-mode backend launcher is provided. Use the manual normal-mode commands above.
 
 Do not launch a script and a manual server for the same service at the same time.
+
+## Academic textbook catalogue import
+
+The supplied file is `database/LibSphere_Academic_Textbooks_1000.csv`. Use `backend/import_academic_textbooks.py`; it performs ISBN-10/13 checksum and uniqueness checks, then verifies each ISBN against the ISBN-specific Open Library edition record and compares the title and author before a row is eligible. Publisher/year disagreements are counted and the ISBN edition metadata is preferred in the Book fields; original supplied values and provenance, including the supplied cover URL marked unverified, remain in the book description. A checksum alone never qualifies a row. The importer is idempotent by normalized ISBN, preserves existing records, and does not create `BookCopy` rows because the CSV has no physical-copy identifiers.
+
+Run the preflight first. It is dry-run by default and reports row/ISBN/duplicate/rejection totals before any DB write:
+
+```powershell
+$python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
+Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+$env:APP_ENV = 'testing'
+$env:DATABASE_URL = 'sqlite:///libsphere_test.db'
+$report = Join-Path $env:USERPROFILE 'T450\DataSets\LibSphere_isbn_repair\reports\academic_textbooks_preflight.json'
+& $python .\backend\import_academic_textbooks.py --csv .\database\LibSphere_Academic_Textbooks_1000.csv --database-url $env:DATABASE_URL --report $report
+```
+
+Review the JSON evidence, then apply with a verified online backup:
+
+```powershell
+& $python .\backend\import_academic_textbooks.py --csv .\database\LibSphere_Academic_Textbooks_1000.csv --database-url $env:DATABASE_URL --report $report --apply
+```
+
+The report records the CSV SHA-256, per-row matching evidence, backup, import totals, and final protected-table totals. The backup is created under `backend/instance/academic_import_backups` before writes. To safely rerun without provider calls, use `--use-preflight $report --report $report --apply`; the CSV path and SHA-256 must still match. The separate `backend/import_books_csv.py` legacy importer rejects blank/invalid ISBN rows and is not the academic import path. The old 10,000-row generated CSV has no ISBNs and should not be imported.
+
+### Roll back an import
+
+Stop Flask first. Keep the current file as a safety copy, then restore the exact backup path recorded in the import JSON using SQLite's backup API (do not delete DB/WAL/SHM files):
+
+```powershell
+$database = (Resolve-Path .\backend\instance\libsphere_test.db).Path
+$backup = 'C:\path\to\academic_import_backups\libsphere_test_before_academic_import_TIMESTAMP.db'
+$python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
+Copy-Item $database "$database.pre-restore"
+$restore = @'
+import sqlite3, sys
+source = sqlite3.connect('file:' + sys.argv[1].replace('\\', '/') + '?mode=ro', uri=True)
+target = sqlite3.connect(sys.argv[2])
+source.backup(target)
+assert target.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+assert not target.execute('PRAGMA foreign_key_check').fetchall()
+target.close(); source.close()
+'@
+& $python -c $restore $backup $database
+```
+
+## Cover retrieval, catalogue cards, and UI behavior
+
+`BookCoverCard` uses the authenticated Flask `GET /api/books/<book_id>/cover` endpoint; React never accesses SQLite or requests cover images from providers directly. Cards ask lazily when visible and only when a stored cover is absent. The backend prefers ISBN-specific Open Library edition/Covers results, then Google Books ISBN results with exact ISBN identifiers, then title+author search. Subject/description terms only refine the final search; title and author still must match. Candidate image URLs are checked as image responses. Existing cover references are preserved; the staff-only `?refresh=1` action is an explicit refresh.
+
+Successful and unsuccessful lookups persist in the additive `cover_lookup_cache` table with source, status, attempt time, and expiry; `db.create_all()` creates this new table but does not migrate existing tables. Defaults are `COVERS_TIMEOUT_SECONDS=5`, `COVERS_RETRIES=2`, `COVERS_MIN_REQUEST_INTERVAL=1`, and `COVERS_FAILED_CACHE_TTL_SECONDS=86400`. Provider requests use backoff, per-process throttling, and in-flight deduplication. The service stores external URLs and attribution/source only; it does not permanently download provider images. Follow Open Library/Google Books terms and attribution policies.
+
+Process missing covers progressively (the command is not called at startup):
+
+```powershell
+& $python .\backend\fetch_missing_covers.py --database-url 'sqlite:///libsphere_test.db' --limit 50 --batch-size 10
+& $python .\backend\fetch_missing_covers.py --database-url 'sqlite:///libsphere_test.db' --limit 50 --retry-failed
+& $python .\backend\fetch_missing_covers.py --database-url 'sqlite:///libsphere_test.db' --refresh-book-id 'BOOK_UUID'
+```
+
+The JSON summary includes records processed, covers matched, no reliable matches, failed requests, skips, and cached reuse. Keep batches small; run the command explicitly and verify the target SQLite URL first. A single live authenticated request for imported ISBN `9780195671544` returned a verified Open Library ISBN cover, persisted it to `Book.cover_image_ref` and `cover_lookup_cache`, and a repeat request reported a cached hit; no bulk cover batch was run.
+
+Catalogue cover frames reserve a portrait 2:3 ratio and use `object-fit: contain`, lazy loading, and a local placeholder. Shared primary-action colors are `--dashboard-button-bg`, `--dashboard-button-hover`, `--dashboard-button-active`, and `--dashboard-button-ink`; both dark/night and light themes keep button labels at or above 4.5:1 contrast. Focus remains visible, disabled states remain legible, and Request Book is warm amber with dark text. The Notifications sidebar entry is removed for Student, Faculty, Department, and Librarian; the separate header notification feed and backend notification APIs/data remain intact.
+
+### Verified 2026-10-19 dataset import
+
+Preflight checked 1,000 source rows: all 1,000 ISBN checksums valid and unique; Open Library returned edition data for all 1,000; 963 title/author associations passed and 37 were rejected for mismatch. Source publisher disagreed with edition evidence on 206 accepted rows and source publication year on 286; source values are retained in provenance notes, while ISBN-edition publisher/year are used in supported Book fields when available. The 963 accepted records were created, 0 physical copies were created, and rerunning the exact saved preflight created 0 additional books (963 matched). Active test DB after import: 1,082 books, 1,026 ISBN-bearing with no invalid/duplicate normalized ISBNs, 56 blank ISBN books retained, 238 copies, 18 loans, 3 reservations, 141 users, 13 suggestions, 25 votes, 31 notifications. Existing `cover_image_ref` values remain; CSV cover URLs are recorded as unverified provenance and are not served as trusted covers. Backup: `backend/instance/academic_import_backups/libsphere_test_before_academic_import_20261019_174148.db` (`integrity_check=ok`, zero FK errors). The JSON preflight/import report is under `%USERPROFILE%\T450\DataSets\LibSphere_isbn_repair\reports\academic_textbooks_preflight_latest.json`.
+
+The 56 retained blank-ISBN records have dependent copies/history and were not deleted. The legacy `books_catalog.json` still has blank-ISBN fixture entries: in-memory automated tests use those demo fixtures, but file-backed seeding refuses a fresh database with fewer than 12 existing legacy titles and returns without upserting the blank-ISBN fixture when the existing file DB is present. Thus a fresh persistent testing DB needs a separately reviewed ISBN-backed seed source; do not use `--reset` or the retired 10,000-row CSV to bypass this gate.
+
+### Verification and remaining limits
+
+Verified in this checkout: backend `unittest discover` **70 passed**; frontend `node --test` **16 passed**; Vite production build succeeded (2,326 modules; existing >500 kB chunk warning); virtual-grid smoke rendered **12/1,000** initial items. The live Flask health route returned HTTP 200, and an authenticated ISBN cover lookup returned Open Library with a persisted cache hit on repeat. SQLite `integrity_check` was `ok`, foreign-key check had 0 errors, and `git diff --check` passed. PowerShell syntax parsing passed for 19 documented blocks plus `scripts/run_backend.ps1`. No bulk cover batch or browser screenshot/overflow inspection was run after these edits; no lint script is configured. The 37 rejected source records and 56 pre-existing blank-ISBN records remain explicit limitations.
+
+## ISBN repair — verified, dry-run first
+
+`backend/repair_book_isbns.py` targets an existing file-backed SQLite DB only and refuses to create a missing database. For the active local test app, the verified target is `backend/instance/libsphere_test.db` from `sqlite:///libsphere_test.db`. Before the first write, a separate SQLite online-backup snapshot and baseline/export were created and verified; the repair CLI is dry-run-first and its research mode reads the DB read-only while writing reports and cache files. `--apply-report` creates another fresh verified backup, revalidates source evidence and current book fields inside a transaction, applies only `VERIFIED` ISBNs, fills only missing cover references after a successful image response, and writes a timestamped audit. It never changes authors/titles, copy/loan/reservation rows, or curated cover references. No unresolved record was removed during the run.
+
+Run from the repository root in PowerShell; first ensure the backend is using the intended test database, never a production/shared file:
+
+```powershell
+$python = (Resolve-Path .\\backend\\.venv\\Scripts\\python.exe).Path
+$repairOutput = Join-Path $env:USERPROFILE 'T450\\DataSets\\LibSphere_isbn_repair'
+$env:APP_ENV = 'testing'
+$env:DATABASE_URL = 'sqlite:///libsphere_test.db'
+& $python .\\backend\\repair_book_isbns.py --database-url 'sqlite:///libsphere_test.db' --out-dir $repairOutput --limit 119 --check-covers
+```
+
+The command above researches the curated source-keyed subset. To search unmapped books by title/author, add `--research-unmapped`; use `--limit N` to bound a batch and rerun later. Successful provider responses are cached in `$repairOutput\\cache`; the script respects Open Library's 1-second minimum gap and stops after HTTP 429 rather than retrying aggressively. Google Books returned HTTP 429 during this run, so that provider was not available. Provider errors, no results from an incomplete query, and ambiguous editions stay `REVIEW_REQUIRED`, not `NOT_FOUND`. The current app has 10,000 generated/unverified catalogue rows without Open Library work keys, so broad research remains incomplete; do not treat the initial 10-record query batch as catalogue-wide research.
+
+Review the CSV and JSON paths printed by the dry run. Apply only after checking the `VERIFIED` rows and using the exact report path:
+
+```powershell
+$report = Join-Path $repairOutput 'reports\\isbn_repair_dry_run_TIMESTAMP.csv'
+& $python .\\backend\\repair_book_isbns.py --database-url 'sqlite:///libsphere_test.db' --out-dir $repairOutput --apply-report $report
+```
+
+Do not pass `--delete-not-found` unless a separate human-reviewed report establishes `NOT_FOUND` with complete searches and every retained relation is safe to remove. The current script/run produced no `NOT_FOUND` rows and removed no books. Rerunning an applied report is idempotent: existing valid ISBNs are skipped.
+
+### 2026-10-18 repair result and artifacts
+
+Baseline backup: `$repairOutput\\backups\\libsphere_test_before_isbn_repair_20261018_152811.db` (`integrity_check=ok`, zero foreign-key errors, SHA-256 `ba09fbd284b3766208799e0e7ffbc1634cc5cb1f37c5873262df3e47e23d8972`). Baseline: 10,119 books (all ISBNs missing), 238 copies, 18 loans (12 active), 3 reservations (2 active), 13 suggestions, 25 votes, 31 notifications, 141 users, 10,187 book-author links, and 6,211 book-department links. The initial missing/invalid export is `reports\\books_missing_or_invalid_isbn_20261018_152811.csv`; baseline JSON is `reports\\isbn_repair_baseline_20261018_152811.json`.
+
+The reviewed dry run is `reports\\isbn_repair_dry_run_20261018_155907.csv` (JSON summary alongside it). It contained 63 unique checksum-valid ISBNs matched to exact Open Library work/edition/title/author/year/publisher evidence and 10,056 `REVIEW_REQUIRED` books. A separate 10-record unmapped title/author sample stayed review-only; Google Books returned 429. Applied backup: `$repairOutput\\backups\\libsphere_test_before_isbn_apply_20261018_155940.db` (integrity ok, zero FK errors, same SHA-256 because the catalogue had not changed since baseline). Audit CSV: `reports\\isbn_repair_audit_20261018_155940.csv` (old/new ISBN, source/evidence, action, and timestamp).
+
+After application: 63 ISBNs added and 56 verified image cover URLs stored; 10,119 books remain, of which 10,056 lack ISBN; invalid ISBNs 0, duplicate normalized ISBNs 0, removals 0. Copies (238), loans (18 / 12 active), reservations (3 / 2 active), and all related user/history tables were unchanged. SQLite `integrity_check` returned `ok`; `foreign_key_check` returned zero rows. ISBN repair is partial: do not claim all catalogue books have ISBNs.
+
+### Restore the pre-apply backup safely
+
+Stop the Flask backend before restoring. This creates a separate SQLite-online-backup copy of the current file first, then restores the timestamped backup using SQLite's backup API (do not delete DB/WAL/SHM files):
+
+```powershell
+$python = (Resolve-Path .\\backend\\.venv\\Scripts\\python.exe).Path
+$repairOutput = Join-Path $env:USERPROFILE 'T450\\DataSets\\LibSphere_isbn_repair'
+$database = (Resolve-Path .\\backend\\instance\\libsphere_test.db).Path
+$backup = Join-Path $repairOutput 'backups\\libsphere_test_before_isbn_apply_20261018_155940.db'
+$safetyCopy = "$database.pre-restore.db"
+$restore = @'
+import pathlib, sqlite3, sys
+database, backup, safety_copy = sys.argv[1:]
+current = sqlite3.connect(database)
+safety = sqlite3.connect(safety_copy)
+current.backup(safety)
+safety.close(); current.close()
+source = sqlite3.connect("file:" + pathlib.Path(backup).as_posix() + "?mode=ro", uri=True)
+target = sqlite3.connect(database)
+source.backup(target)
+assert target.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+assert not target.execute("PRAGMA foreign_key_check").fetchall()
+target.close(); source.close()
+'@
+& $python -c $restore $database $backup $safetyCopy
+```
 
 ## Troubleshooting
 

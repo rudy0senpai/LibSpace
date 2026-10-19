@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
-import { BookOpen, Bell, Lightbulb, LogOut, Search, Table2, ArrowUp, Plus, Loader2 } from 'lucide-react';
+import { BookOpen, Lightbulb, LogOut, Search, Table2, ArrowUp, Plus, Loader2 } from 'lucide-react';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
 import { searchBooks, getMyLoans, getMySuggestions, createSuggestion, voteSuggestion, getCategories, requestBook, cancelMyLoan } from '../../services/api';
 import RequestedBooks from './RequestedBooks';
 import VirtualBookGrid from './VirtualBookGrid';
+import BookCoverCard from '../../components/catalogue/BookCoverCard';
 
 export default function UserDashboard() {
   const { user, signOut } = useAuth();
@@ -163,16 +164,12 @@ export default function UserDashboard() {
     ['search', Search, 'Search Books'],
     ['mybooks', BookOpen, 'My Books'],
     ['suggestions', Lightbulb, 'Suggestions'],
-    ['notifications', Bell, 'Notifications'],
   ];
 
-  const sharedNav = nav.map(([id, icon, label]) => ({
-    id, icon, label,
-    ...(id === 'notifications' ? { disabled: true, reason: 'The live notification feed is not connected.' } : {}),
-  }));
+  const sharedNav = nav.map(([id, icon, label]) => ({ id, icon, label }));
   const pageTitle = {
     dashboard: user?.role === 'FACULTY' ? 'Teacher Dashboard' : 'Student Dashboard',
-    search: 'Search Catalogue', mybooks: 'My Books', suggestions: 'Community Suggestions', notifications: 'Notifications',
+    search: 'Search Catalogue', mybooks: 'My Books', suggestions: 'Community Suggestions',
   }[page] || 'Library Dashboard';
   function openCatalogue(value) {
     setQuery(value);
@@ -212,8 +209,7 @@ export default function UserDashboard() {
             <b>
               {page === 'dashboard' ? (user?.role === 'FACULTY' ? 'Teacher Dashboard' : 'Student Dashboard') :
                page === 'search' ? 'Search Catalogue' :
-               page === 'mybooks' ? 'My Books' :
-               page === 'suggestions' ? 'Community Suggestions' : 'Notifications'}
+               page === 'mybooks' ? 'My Books' : 'Community Suggestions'}
             </b>
             <small>Personalized library activity</small>
           </div>
@@ -279,18 +275,22 @@ export default function UserDashboard() {
               </div>
               {error && <div className="notice error" role="alert">{error}</div>}
               {searchResults.length > 0 && <p className="prototype-muted">Showing {searchResults.length} of {searchTotal} matching books.</p>}
-              {searchResults.length > 0 && <VirtualBookGrid items={searchResults} renderItem={(book, index, total) => (
-                <div className="prototype-book-card" role="listitem" aria-posinset={index + 1} aria-setsize={total} key={book.id}>
-                  <b>{book.title}</b>
-                  <small>{book.author}</small>
-                  <span className={book.available > 0 ? 'available' : 'unavailable'}>
-                    {book.available > 0 ? `Available ${book.available}/${book.total}` : 'Not Available'}
-                  </span>
-                  <small>Rack: {book.rack}</small>
-                  <button disabled={requestingBookId === book.id || activeBookIds.has(String(book.id)) || book.available <= 0} onClick={() => handleBookRequest(book)}>
+              {searchResults.length > 0 && <VirtualBookGrid items={searchResults} renderItem={(book, index, total, onExpandedChange, expanded) => (
+                <BookCoverCard
+                  key={book.id}
+                  book={book}
+                  position={index + 1}
+                  setSize={total}
+                  expanded={expanded}
+                  onExpandedChange={onExpandedChange}
+                  actions={<button
+                    type="button"
+                    disabled={requestingBookId === book.id || activeBookIds.has(String(book.id)) || book.available <= 0}
+                    onClick={() => handleBookRequest(book)}
+                  >
                     {requestingBookId === book.id ? 'Submitting…' : activeBookIds.has(String(book.id)) ? 'Already requested' : book.available <= 0 ? 'Unavailable' : 'Request Book'}
-                  </button>
-                </div>
+                  </button>}
+                />
               )} />}
               {searchResults.length === 0 && !loading && (
                 <p className="prototype-muted">{searchTotal ? 'No books on this page.' : 'Search the catalogue to see matching books.'}</p>
@@ -351,14 +351,7 @@ export default function UserDashboard() {
             </>
           )}
 
-          {page === 'notifications' && (
-            <>
-              <h1>Notifications</h1>
-                <Panel title="Notification status">
-                  <p className="prototype-muted">The live notification feed is not connected. No library notifications are shown here.</p>
-                </Panel>
-            </>
-          )}
+
         </section>
       </main>
     </div>

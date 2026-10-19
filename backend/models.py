@@ -249,6 +249,20 @@ class Book(db.Model):
     )
 
 
+class CoverLookupCache(db.Model):
+    """Persistent success/failure cache for background and on-demand cover lookups."""
+    __tablename__ = "cover_lookup_cache"
+
+    cache_key = Column(String(64), primary_key=True)
+    isbn = Column(String(20), index=True)
+    status = Column(String(20), nullable=False)
+    cover_url = Column(String(1000))
+    source = Column(String(100))
+    error = Column(String(300))
+    attempted_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+
 class BookCopy(db.Model):
     __tablename__ = "book_copies"
 

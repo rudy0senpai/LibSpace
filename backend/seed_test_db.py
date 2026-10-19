@@ -225,6 +225,20 @@ def seed_all():
             "ON loans(book_copy_id) WHERE status IN ('REQUESTED','APPROVED','BORROWED','OVERDUE')"
         ))
         catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))["books"]
+        if db_file and not any(record.get("isbn") for record in catalog):
+            seed_titles = {record["title"].strip().casefold() for record in catalog}
+            existing_seed_titles = {
+                title.casefold() for (title,) in db.session.query(Book.title).all()
+                if title.casefold() in seed_titles
+            }
+            if len(existing_seed_titles) < 12:
+                raise RuntimeError(
+                    "Refusing fresh file-backed seeding: the legacy catalog has no ISBNs. "
+                    "Import a verified ISBN catalogue first; the seeder will not recreate blank-ISBN books."
+                )
+            # A file-backed database is already persistent application data. The legacy
+            # fixture contains no ISBNs and invented demo copies, so never upsert it there.
+            return
         validate_unique_seed_user_ids(build_testing_profiles())
         departments = {}
         for code, name, short_name in [*DEPARTMENTS, *LEGACY_DEPARTMENTS]:
@@ -276,12 +290,20 @@ def seed_all():
         for record in catalog:
             title = record["title"].strip()
             book = db.session.query(Book).filter(db.func.lower(Book.title) == title.casefold()).first()
+            if db_file and not record.get("isbn"):
+                # Persistent seeding may preserve an existing legacy record but must not
+                # create or rewrite it from the obsolete blank-ISBN fixture.
+                continue
+            if book and "[Academic CSV provenance:" in (book.description or ""):
+                continue
             if book is None:
                 book = Book(title=title)
                 db.session.add(book)
             book.title = title
             book.subtitle = record.get("subtitle")
-            book.isbn = None  # No ISBN is stored unless edition-level verification is available.
+            # A missing seed ISBN is not an instruction to erase a verified catalogue ISBN.
+            if record.get("isbn") and not book.isbn:
+                book.isbn = record["isbn"]
             book.description = None
             book.publication_year = record.get("year")
             book.edition = None
@@ -311,7 +333,11 @@ def seed_all():
                     book.departments.append(departments[code])
         db.session.flush()
 
-        books = db.session.query(Book).order_by(Book.title).all()
+        seed_titles = {record["title"].strip().casefold() for record in catalog}
+        books = [
+            book for book in db.session.query(Book).order_by(Book.title).all()
+            if book.title.casefold() in seed_titles and "[Academic CSV provenance:" not in (book.description or "")
+        ]
         copies = {}
         for index, book in enumerate(books, start=1):
             for suffix in ("A", "B"):

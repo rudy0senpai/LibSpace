@@ -61,7 +61,7 @@ Only these directories plus `.env.example`, `.gitignore`, `docker-compose.yml` a
 
 ## Local SQLite testing (Windows PowerShell)
 
-SQLite is the sole database used by the current local development and testing workflow. Persistent testing data is stored in `backend/instance/libsphere_test.db`; the local-development default is `backend/instance/libsphere.db`. Flask resolves relative SQLite URLs beneath its instance directory. The test seeder explicitly selects SQLite and rejects non-SQLite URLs. Seeding is repeatable and does not reset data unless `--reset` is explicitly supplied.
+SQLite is the sole database used by the current local development and testing workflow. Persistent testing data is stored in `backend/instance/libsphere_test.db`; the local-development default is `backend/instance/libsphere.db`. Flask resolves relative SQLite URLs beneath its instance directory. The checked-in legacy seed catalog has blank ISBNs and is retained only for isolated in-memory tests. File-backed `seed_test_db.py` refuses a fresh database without an ISBN-backed source and returns without row upserts when an existing persistent catalog is present; it never resets or reseeds persistent data.
 
 1. From the repository root, create the backend virtual environment if needed and install dependencies:
 
@@ -71,22 +71,7 @@ SQLite is the sole database used by the current local development and testing wo
    & $python -m pip install -r .\backend\requirements.txt
    ```
 
-2. Initialize and seed the local SQLite database (safe to rerun; does not delete the existing database):
-
-   ```powershell
-   Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-   $env:APP_ENV = 'testing'
-   $env:DATABASE_URL = 'sqlite:///libsphere_test.db'
-   & $python .\backend\seed_test_db.py
-   ```
-
-   To explicitly recreate only this SQLite test database, run:
-
-   ```powershell
-   & $python .\backend\seed_test_db.py --reset
-   ```
-
-   The seeder rejects non-SQLite URLs and database files outside `backend/instance/`. It never drops or alters PostgreSQL.
+2. The old JSON fixture is not a safe source for fresh file-backed seeding. Do not run `--reset` or invoke `seed_test_db.py` to repopulate the persistent testing DB. Automated tests use an isolated in-memory SQLite database and may load the legacy fixture there. For a new persistent catalogue, first use the reviewed academic CSV preflight/import workflow in `HOW_TO_RUN.md`; that import does not create copies or demo user accounts.
 
 3. Start the backend in a PowerShell window:
 
@@ -118,7 +103,7 @@ SQLite is the sole database used by the current local development and testing wo
 
    This is deliberately passwordless test authentication, not identity verification. The frontend shows this three-field form only when `VITE_AUTH_MODE=testing`; otherwise it displays no login fields. The backend accepts the seeded profiles only while `APP_ENV=testing`. Existing production API authentication remains unchanged and does not accept this passwordless flow.
 
-The catalog seed contains 119 distinct titles (at least the requested 100), with Open Library work references; ISBN, edition, publisher, and other metadata are included only where the source record supported them. It creates the required **141 testing accounts**: 100 students, 30 faculty, 9 department accounts, and 2 librarians. All demo accounts are testing profiles, not verified MITRC personnel. The seed also creates 238 copies and related workflow records. The automated tests verify role counts, department associations, catalog distinctness, and seed idempotence against SQLite; they do not constitute a live persistent-file/browser E2E run.
+The isolated in-memory test fixture contains 119 legacy titles and generated demo copies solely for automated tests; it does not describe the live file-backed catalogue. The active test SQLite file is the separate imported/curated catalogue documented in `HOW_TO_RUN.md`. The academic import did not create physical copies or modify seeded user/workflow counts.
 
 ### Department testing accounts
 

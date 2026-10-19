@@ -23,6 +23,11 @@ export async function searchBooks(params = {}) {
   return fetchWithAuth(`/api/books/search?${query}`);
 }
 
+export async function lookupBookCover(bookId, { refresh = false } = {}) {
+  const suffix = refresh ? '?refresh=1' : '';
+  return fetchWithAuth(`/api/books/${encodeURIComponent(bookId)}/cover${suffix}`);
+}
+
 export async function getMyLoans() {
   return fetchWithAuth('/api/users/me/loans');
 }

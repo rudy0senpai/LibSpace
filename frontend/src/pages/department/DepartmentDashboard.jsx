@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, BookOpen, BarChart, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
+import { BookOpen, BarChart, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useDepartmentDashboard } from '../../hooks/useDepartmentDashboard';
 import CalendarDatePicker from '../../components/department/CalendarDatePicker';
@@ -90,7 +90,7 @@ export default function DepartmentDashboard() {
           <button type="button" className="nav" disabled title="Book Search is not available in this dashboard yet."><Search />Book Search · Unavailable</button>
           <button type="button" className={`nav ${activeSection === 'suggestions' ? 'active' : ''}`} aria-current={activeSection === 'suggestions' ? 'page' : undefined} onClick={() => navigateTo('suggestions', 'department-suggestions')}><Lightbulb />Suggestions</button>
           <button type="button" className={`nav ${activeSection === 'reports' ? 'active' : ''}`} aria-current={activeSection === 'reports' ? 'page' : undefined} onClick={() => navigateTo('reports', 'department-reports')}><BarChart />Reports</button>
-          <button type="button" className="nav" disabled title="Notifications are not available in this dashboard yet."><Bell />Notifications · Unavailable</button>
+
         </nav>
         <div className="quick">
           <div className="quick-title">

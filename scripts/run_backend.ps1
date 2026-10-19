@@ -16,8 +16,12 @@ $env:DATABASE_URL = 'sqlite:///libsphere_test.db'
 $env:CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
 $env:JWT_SECRET_KEY = [guid]::NewGuid().ToString() + [guid]::NewGuid().ToString()
 
-& $python (Join-Path $repoRoot 'backend\seed_test_db.py')
-if ($LASTEXITCODE -ne 0) { throw 'SQLite test database seeding failed.' }
+# File-backed seeding is gated because the legacy test catalog has no ISBNs.
+# Require an already initialized test DB and never run a seeder during startup.
+$testDatabase = Join-Path $repoRoot 'backend\instance\libsphere_test.db'
+if (-not (Test-Path $testDatabase)) {
+    throw 'No existing testing DB found. Fresh file-backed seeding is disabled until an ISBN-backed test seed source is reviewed.'
+}
 
 Set-Location (Join-Path $repoRoot 'backend')
 & $python app.py
