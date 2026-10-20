@@ -139,8 +139,7 @@ export default function LibrarianWorkflows({ page, onChanged }) {
     catch (err) { setError(err.message || 'Unable to add copy.'); }
   }
   async function returnBook(loan) {
-    const prompt = `Record return for “${loan.book_title}” from ${loan.borrower} (${loan.user_id}), copy ${loan.accession_number}?`;
-    if (!window.confirm(prompt)) return;
+    if (!loan?.id || returningId) return;
     setReturningId(loan.id); setError(''); setMessage('');
     try {
       await returnLibrarianLoan(loan.id);

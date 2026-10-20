@@ -116,10 +116,7 @@ def get_librarian_analytics(start_raw=None, end_raw=None):
     end_exclusive = datetime.combine(end + timedelta(days=1), time.min)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    overdue_condition = or_(
-        Loan.status == LoanStatus.OVERDUE,
-        (Loan.status == LoanStatus.BORROWED) & (Loan.due_at < now),
-    )
+    overdue_condition = Loan.status == LoanStatus.OVERDUE
     summary = {
         "total_books": db.session.query(func.count(Book.id)).scalar() or 0,
         "total_copies": db.session.query(func.count(BookCopy.id)).scalar() or 0,

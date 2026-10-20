@@ -1,7 +1,26 @@
-const REVIEWABLE_STATUSES = ['UNDER_REVIEW', 'APPROVED', 'REJECTED', 'ORDERED', 'AVAILABLE'];
+import { useState } from 'react';
+import { AlertTriangle, Book, Calendar, CheckCircle2, Clock, RotateCcw, ThumbsUp, User } from 'lucide-react';
+
+const ALL_SUGGESTION_STATUSES = [
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'APPROVED',
+  'ORDERED',
+  'AVAILABLE',
+  'REJECTED',
+  'DUPLICATE',
+  'ALREADY_AVAILABLE',
+];
 const ACTIVE_LOAN_STATUSES = new Set(['BORROWED', 'OVERDUE']);
-const label = value => String(value || 'UNKNOWN').replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, letter => letter.toUpperCase());
+
+const label = value =>
+  String(value || 'UNKNOWN')
+    .replaceAll('_', ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, letter => letter.toUpperCase());
+
 const classToken = value => String(value || 'unknown').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+
 const formattedDate = value => {
   const parsed = value ? new Date(value) : null;
   return parsed && !Number.isNaN(parsed.getTime())
@@ -19,45 +38,154 @@ function dueMessage(loan) {
   return difference < 0 ? `${days} day${days === 1 ? '' : 's'} overdue` : `Due in ${days} day${days === 1 ? '' : 's'}`;
 }
 
-function StatusBadge({ status, kind = 'loan' }) {
+export function StatusBadge({ status, kind = 'loan' }) {
   const text = label(status);
-  return <span className={`librarian-status-badge librarian-status-badge--${kind} librarian-status-badge--${classToken(status)}`} aria-label={`Status: ${text}`}>{text}</span>;
+  const isOverdue = status === 'OVERDUE';
+  return (
+    <span
+      className={`librarian-status-badge librarian-status-badge--${kind} librarian-status-badge--${classToken(status)}${isOverdue ? ' is-overdue' : ''}`}
+      aria-label={`Status: ${text}`}
+    >
+      {isOverdue && <AlertTriangle size={12} className="librarian-badge-icon" aria-hidden="true" />}
+      {status === 'RETURNED' && <CheckCircle2 size={12} className="librarian-badge-icon" aria-hidden="true" />}
+      {text}
+    </span>
+  );
 }
 
 export function ReturnLoanCard({ loan, busy, returning, onReturn }) {
+  const [confirming, setConfirming] = useState(false);
   const active = ACTIVE_LOAN_STATUSES.has(loan.status);
+  const isOverdue = loan.status === 'OVERDUE';
+  const isReturned = loan.status === 'RETURNED';
+
   return (
-    <article className={`librarian-return-card librarian-record-card${loan.status === 'OVERDUE' ? ' is-overdue' : ''}`} aria-labelledby={`loan-${loan.id}-title`}>
+    <article
+      className={`librarian-return-card librarian-record-card${isOverdue ? ' is-overdue' : ''}${isReturned ? ' is-returned' : ''}`}
+      aria-labelledby={`loan-${loan.id}-title`}
+    >
       <header className="librarian-record-card__header">
-        {loan.cover_image_ref && <img className="librarian-return-card__cover" src={loan.cover_image_ref} alt="" loading="lazy" onError={event => { event.currentTarget.hidden = true; }} />}
+        <div className="librarian-return-card__thumb-wrap">
+          {loan.cover_image_ref ? (
+            <img
+              className="librarian-return-card__cover"
+              src={loan.cover_image_ref}
+              alt=""
+              loading="lazy"
+              onError={event => {
+                event.currentTarget.style.display = 'none';
+                if (event.currentTarget.nextSibling) {
+                  event.currentTarget.nextSibling.style.display = 'flex';
+                }
+              }}
+            />
+          ) : null}
+          <div
+            className="librarian-return-card__cover-fallback"
+            style={{ display: loan.cover_image_ref ? 'none' : 'flex' }}
+            aria-hidden="true"
+          >
+            <Book size={20} />
+          </div>
+        </div>
+
         <div className="librarian-record-card__heading">
-          <h3 id={`loan-${loan.id}-title`} title={loan.book_title}>{loan.book_title || 'Untitled book'}</h3>
-          <p className="librarian-record-card__copy">Copy <strong>{loan.accession_number || '—'}</strong></p>
+          <h3 id={`loan-${loan.id}-title`} title={loan.book_title}>
+            {loan.book_title || 'Untitled book'}
+          </h3>
+          <p className="librarian-record-card__copy">
+            Copy identifier: <strong className="accession-code">{loan.accession_number || '—'}</strong>
+          </p>
         </div>
         <StatusBadge status={loan.status} />
       </header>
-      {loan.status === 'OVERDUE' && <p className="librarian-overdue-callout"><strong>Overdue:</strong> {dueMessage(loan)}. Follow up with the borrower.</p>}
+
+      {isOverdue && (
+        <div className="librarian-overdue-callout" role="alert">
+          <AlertTriangle size={16} aria-hidden="true" />
+          <span>
+            <strong>Overdue notice:</strong> {dueMessage(loan)}. Follow up with the borrower.
+          </span>
+        </div>
+      )}
+
       <div className="librarian-record-card__details">
-        <section aria-label="Borrower details">
-          <h4>Borrower</h4>
+        <section className="librarian-detail-group" aria-label="Borrower details">
+          <h4><User size={13} aria-hidden="true" /> Borrower</h4>
           <dl>
-            <div><dt>Name</dt><dd title={loan.borrower}>{loan.borrower || '—'}</dd></div>
-            <div><dt>User ID</dt><dd title={loan.user_id}>{loan.user_id || '—'}</dd></div>
+            <div>
+              <dt>Display name</dt>
+              <dd title={loan.borrower}>{loan.borrower || '—'}</dd>
+            </div>
+            <div>
+              <dt>Login ID</dt>
+              <dd title={loan.user_id} className="user-id-code">{loan.user_id || '—'}</dd>
+            </div>
           </dl>
         </section>
-        <section aria-label="Loan dates">
-          <h4>Loan dates</h4>
+
+        <section className="librarian-detail-group" aria-label="Loan dates">
+          <h4><Calendar size={13} aria-hidden="true" /> Schedule</h4>
           <dl>
-            <div><dt>Issued</dt><dd>{formattedDate(loan.issued_at)}</dd></div>
-            <div><dt>Due</dt><dd>{formattedDate(loan.due_at)}</dd></div>
+            <div>
+              <dt>Issued</dt>
+              <dd>{formattedDate(loan.issued_at)}</dd>
+            </div>
+            <div>
+              <dt>Due date</dt>
+              <dd>{formattedDate(loan.due_at)}</dd>
+            </div>
           </dl>
         </section>
       </div>
+
       <footer className="librarian-record-card__footer">
-        <span className={`librarian-due-state${loan.status === 'OVERDUE' ? ' is-overdue' : ''}`} aria-live="polite">{dueMessage(loan)}</span>
-        {active
-          ? <button type="button" className="librarian-primary-action" disabled={busy} onClick={onReturn}>{returning ? 'Recording return…' : 'Record return'}</button>
-          : <span className="librarian-record-card__no-action">No active return action</span>}
+        <div className={`librarian-due-state${isOverdue ? ' is-overdue' : ''}`} aria-live="polite">
+          <Clock size={13} aria-hidden="true" />
+          <span>{dueMessage(loan)}</span>
+        </div>
+
+        {active ? (
+          confirming ? (
+            <div className="librarian-confirm-group" role="group" aria-label="Confirm return action">
+              <span className="librarian-confirm-prompt">Confirm return?</span>
+              <button
+                type="button"
+                className="librarian-confirm-action"
+                disabled={busy || returning}
+                onClick={() => {
+                  setConfirming(false);
+                  onReturn?.();
+                }}
+              >
+                {returning ? 'Recording…' : 'Yes, return'}
+              </button>
+              <button
+                type="button"
+                className="librarian-cancel-action"
+                disabled={busy || returning}
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="librarian-primary-action"
+              disabled={busy || returning}
+              onClick={() => setConfirming(true)}
+              aria-label={`Record return for ${loan.book_title || 'book'}, copy ${loan.accession_number || ''}`}
+            >
+              <RotateCcw size={14} aria-hidden="true" />
+              {returning ? 'Recording return…' : 'Record return'}
+            </button>
+          )
+        ) : (
+          <span className="librarian-record-card__no-action">
+            {isReturned ? 'Returned' : 'No return action available'}
+          </span>
+        )}
       </footer>
     </article>
   );
@@ -65,30 +193,85 @@ export function ReturnLoanCard({ loan, busy, returning, onReturn }) {
 
 export function SuggestionReviewCard({ item, busy, reviewing, onReview }) {
   const statusId = `suggestion-${item.id}-review-status`;
-  const savedDate = formattedDate(item.submitted_at);
+  const savedDate = formattedDate(item.submitted_at || item.created_at);
+
   return (
-    <article className="librarian-suggestion-card librarian-record-card" aria-labelledby={`suggestion-${item.id}-title`}>
+    <article
+      className="librarian-suggestion-card librarian-record-card"
+      aria-labelledby={`suggestion-${item.id}-title`}
+    >
       <header className="librarian-record-card__header librarian-suggestion-card__header">
         <div className="librarian-record-card__heading">
-          <h3 id={`suggestion-${item.id}-title`} title={item.title}>{item.title || 'Untitled suggestion'}</h3>
-          <p className="librarian-suggestion-card__author">{item.author || 'Author not recorded'}</p>
+          <h3 id={`suggestion-${item.id}-title`} title={item.title}>
+            {item.title || 'Untitled suggestion'}
+          </h3>
+          <p className="librarian-suggestion-card__author" title={item.author}>
+            By <strong>{item.author || 'Author not recorded'}</strong>
+          </p>
         </div>
         <StatusBadge status={item.status} kind="suggestion" />
       </header>
+
       <div className="librarian-suggestion-card__meta">
-        <div><span>Requester</span><strong title={item.requester}>{item.requester || '—'}</strong><small>{label(item.requester_role)}</small></div>
-        <div><span>Department / programme</span><strong title={item.department || ''}>{item.department || 'Not recorded'}</strong></div>
-        <div><span>Submitted</span><strong>{savedDate}</strong></div>
-        <div className="librarian-vote-count" aria-label={`${Number(item.votes) || 0} votes`}><strong>{Number(item.votes) || 0}</strong><span>Votes</span></div>
+        <div className="librarian-meta-cell">
+          <span className="meta-label">Requester</span>
+          <strong className="meta-value" title={item.requester}>{item.requester || '—'}</strong>
+          <small className="meta-sub">{label(item.requester_role)}</small>
+        </div>
+        <div className="librarian-meta-cell">
+          <span className="meta-label">Department / Programme</span>
+          <strong className="meta-value" title={item.department || ''}>{item.department || 'Not recorded'}</strong>
+        </div>
+        <div className="librarian-meta-cell">
+          <span className="meta-label">Submitted</span>
+          <strong className="meta-value">{savedDate}</strong>
+        </div>
+        <div
+          className="librarian-vote-count"
+          aria-label={`${Number(item.votes) || 0} votes`}
+        >
+          <ThumbsUp size={15} aria-hidden="true" />
+          <div className="vote-num-group">
+            <strong>{Number(item.votes) || 0}</strong>
+            <span>votes</span>
+          </div>
+        </div>
       </div>
-      {item.reason && <div className="librarian-suggestion-card__reason"><h4>Reason</h4><p title={item.reason}>{item.reason}</p></div>}
+
+      {item.reason && (
+        <div className="librarian-suggestion-card__reason">
+          <h4>Reason for request</h4>
+          <p title={item.reason}>{item.reason}</p>
+        </div>
+      )}
+
       <footer className="librarian-suggestion-card__footer">
-        <label htmlFor={statusId}>Change review status</label>
-        <select id={statusId} aria-label={`Review status for ${item.title}`} value="" disabled={busy} onChange={event => onReview(item, event.target.value)}>
-          <option value="">Choose a supported status…</option>
-          {REVIEWABLE_STATUSES.map(status => <option key={status} value={status}>{label(status)}</option>)}
-        </select>
-        {reviewing && <span className="librarian-saving-status" role="status">Saving review status…</span>}
+        <div className="librarian-status-selector-wrap">
+          <label htmlFor={statusId}>Review status</label>
+          <select
+            id={statusId}
+            aria-label={`Review status for ${item.title}`}
+            value={item.status || ''}
+            disabled={busy || reviewing}
+            onChange={event => {
+              const nextStatus = event.target.value;
+              if (nextStatus && nextStatus !== item.status) {
+                onReview(item, nextStatus);
+              }
+            }}
+          >
+            {ALL_SUGGESTION_STATUSES.map(s => (
+              <option key={s} value={s}>
+                {label(s)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {reviewing && (
+          <span className="librarian-saving-status" role="status" aria-live="polite">
+            Saving changes…
+          </span>
+        )}
       </footer>
     </article>
   );
