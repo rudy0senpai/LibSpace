@@ -229,11 +229,12 @@ def source_notes(row: dict, evidence: dict) -> str:
         "source_language": row.get("language"),
         "edition_evidence_url": evidence.get("edition_record_url"),
     }
-    return "[Academic CSV provenance: " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "]"
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 def import_verified(app, db, models, records: list[dict]) -> dict:
-    Book, BookCopy, Author, Publisher, Category, Department = models
+    Book, BookCopy, Author, Publisher, Category, Department = models[:6]
+    BookSourceMetadata = models[6] if len(models) > 6 else None
     stats = Counter({"created_books": 0, "matched_existing": 0, "updated_missing_metadata": 0, "copies_created": 0, "rejected_conflicts": 0})
     with app.app_context():
         try:
@@ -263,6 +264,11 @@ def import_verified(app, db, models, records: list[dict]) -> dict:
                         book.edition = row["edition"]; changed = True
                     if not book.language and row.get("language"):
                         book.language = row["language"]; changed = True
+                    if BookSourceMetadata:
+                        metadata = book.source_metadata or BookSourceMetadata(book=book)
+                        metadata.source_name = "LibSphere_Academic_Textbooks_1000.csv"
+                        metadata.metadata_json = source_notes(row, evidence)
+                        db.session.add(metadata)
                     if changed:
                         stats["updated_missing_metadata"] += 1
                     continue
@@ -273,7 +279,12 @@ def import_verified(app, db, models, records: list[dict]) -> dict:
                     stats["rejected_conflicts"] += 1
                     continue
                 title = row["title"]
-                book = Book(isbn=isbn, title=title, publication_year=year, edition=row.get("edition") or None, language=row.get("language") or "English", description=source_notes(row, evidence))
+                book = Book(isbn=isbn, title=title, publication_year=year, edition=row.get("edition") or None, language=row.get("language") or "English", description=None)
+                if BookSourceMetadata:
+                    book.source_metadata = BookSourceMetadata(
+                        source_name="LibSphere_Academic_Textbooks_1000.csv",
+                        metadata_json=source_notes(row, evidence),
+                    )
                 publishers_in_record = evidence.get("edition_publishers") or []
                 publisher_name = publishers_in_record[0] if publishers_in_record else row.get("publisher", "")
                 if publisher_name:

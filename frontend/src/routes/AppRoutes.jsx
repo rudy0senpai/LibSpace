@@ -6,6 +6,7 @@ import LibrarianDashboard from '../pages/librarian/LibrarianDashboard';
 import DepartmentDashboard from '../pages/department/DepartmentDashboard';
 import ProtectedRoute from './ProtectedRoute';
 import RoleRoute from './RoleRoute';
+import { getDashboardRoute } from '../services/roleRoutes';
 
 function routeFromHash() {
   return window.location.hash.replace(/^#\/?/, '') || '';
@@ -26,12 +27,7 @@ export default function AppRoutes() {
   if (route === 'login' && !user) return <Login />;
   if (!user) return <Login />;
 
-  const destination = {
-    DEPARTMENT: 'department',
-    LIBRARIAN: 'librarian',
-    STUDENT: 'student',
-    FACULTY: 'teacher',
-  }[user.role];
+  const destination = getDashboardRoute(user.role);
 
   if (!destination) {
     window.location.hash = '#/login';

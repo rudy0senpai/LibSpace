@@ -2,18 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronDown, ChevronUp } from 'lucide-react';
 import { lookupBookCover } from '../../services/api';
 import { lookupBookMetadata } from '../../services/metadataService';
+import { coverLookupKey, getCoverCandidates, nextCoverIndex, visibleBookDescription } from './coverCardData';
 
 const display = value => value == null || value === '' ? 'Not listed' : value;
-export const getCoverCandidates = (book, metadata) => [...new Set([
-  book?.cover_image_ref,
-  metadata?.cover_url,
-].filter(Boolean))];
+export { getCoverCandidates } from './coverCardData';
 const yearFrom = value => {
   const match = String(value || '').match(/\b(1[4-9]\d{2}|20\d{2}|2100)\b/);
   return match?.[0] || '';
 };
 
-export default function BookCoverCard({ book, actions = null, position, setSize, expanded: expandedProp, onExpandedChange }) {
+function BookCoverCardContent({ book, actions = null, position, setSize, expanded: expandedProp, onExpandedChange }) {
   const cardRef = useRef(null);
   const [localExpanded, setLocalExpanded] = useState(false);
   const expanded = typeof expandedProp === 'boolean' ? expandedProp : localExpanded;
@@ -43,21 +41,30 @@ export default function BookCoverCard({ book, actions = null, position, setSize,
   }, []);
 
   useEffect(() => {
-    const requestKey = isbn || book.id;
-    if (!inViewport || !requestKey || (book.cover_image_ref && coverIndex === 0) || requestedISBN.current === requestKey) return undefined;
+    const requestKey = coverLookupKey(isbn, book.id, coverIndex);
+    if (!inViewport || !(isbn || book.id) || (book.cover_image_ref && coverIndex === 0) || requestedISBN.current === requestKey) return undefined;
     requestedISBN.current = requestKey;
     let active = true;
     setMetadataLoading(true);
     const metadataPromise = isbn ? lookupBookMetadata(isbn) : Promise.resolve(null);
-    const coverPromise = lookupBookCover(book.id).catch(() => null);
-    Promise.all([metadataPromise, coverPromise]).then(([details, coverResult]) => {
+    const coverPromise = lookupBookCover(book.id, {
+      failed: coverIndex > 0,
+    }).catch(() => null);
+    metadataPromise.then(details => {
+      if (active && details) setMetadata(current => ({ ...details, ...current, attribution: current?.attribution || details.attribution }));
+    }).catch(() => {});
+    coverPromise.then(coverResult => {
       if (!active) return;
       const cover = coverResult?.data;
-      setMetadata({
-        ...(details || {}),
+      if (cover?.cover_url && !book.cover_image_ref && coverIndex > 0) {
+        requestedISBN.current = coverLookupKey(isbn, book.id, 0);
+        setCoverIndex(0);
+      }
+      setMetadata(current => ({
+        ...current,
         cover_url: cover?.cover_url || null,
-        attribution: cover?.source ? `Cover source: ${cover.source.replaceAll('_', ' ')}.` : details?.attribution,
-      });
+        attribution: cover?.source ? `Cover source: ${cover.source.replaceAll('_', ' ')}.` : current?.attribution,
+      }));
     }).finally(() => {
       if (active) setMetadataLoading(false);
     });
@@ -70,7 +77,7 @@ export default function BookCoverCard({ book, actions = null, position, setSize,
   const publisher = book.publisher || metadata?.publisher || '';
   const year = book.publication_year || yearFrom(metadata?.published_date);
   const category = book.category || metadata?.categories?.[0] || 'Uncategorized';
-  const description = book.description || metadata?.description || '';
+  const description = visibleBookDescription(book.description) || visibleBookDescription(metadata?.description);
   const toggleExpanded = () => {
     const next = !expanded;
     if (typeof expandedProp !== 'boolean') setLocalExpanded(next);
@@ -109,7 +116,7 @@ export default function BookCoverCard({ book, actions = null, position, setSize,
               alt={`Cover of ${title}`}
               loading="lazy"
               decoding="async"
-              onError={() => setCoverIndex(index => index + 1)}
+              onError={() => setCoverIndex(index => nextCoverIndex(index, coverSources.length))}
             />
           ) : (
             <div className="book-cover-card__placeholder" role="img" aria-label={`No cover available for ${title}`}>
@@ -146,4 +153,10 @@ export default function BookCoverCard({ book, actions = null, position, setSize,
       </div>
     </article>
   );
+}
+
+export default function BookCoverCard(props) {
+  const book = props.book || {};
+  const identity = book.id || book.isbn || book.title || 'book-cover-card';
+  return <BookCoverCardContent key={identity} {...props} />;
 }

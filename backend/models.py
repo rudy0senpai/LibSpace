@@ -242,11 +242,26 @@ class Book(db.Model):
     departments = relationship("Department", secondary=book_departments, back_populates="books")
     copies = relationship("BookCopy", back_populates="book")
     reservations = relationship("Reservation", back_populates="book")
+    source_metadata = relationship("BookSourceMetadata", back_populates="book", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("publication_year BETWEEN 1400 AND 2100", name="check_publication_year"),
         Index("idx_books_category", "category_id"),
     )
+
+
+class BookSourceMetadata(db.Model):
+    """Source provenance kept apart from the human-facing book description."""
+    __tablename__ = "book_source_metadata"
+
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    book_id = Column(GUID, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, unique=True)
+    source_name = Column(String(200), nullable=False)
+    metadata_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now())
+
+    book = relationship("Book", back_populates="source_metadata")
 
 
 class CoverLookupCache(db.Model):
@@ -284,6 +299,16 @@ class BookCopy(db.Model):
     __table_args__ = (
         Index("idx_book_copies_book_status", "book_id", "status"),
     )
+
+
+class BookAvailabilityHold(db.Model):
+    """Tracks copies temporarily taken out of circulation by the availability workflow."""
+    __tablename__ = "book_availability_holds"
+
+    book_copy_id = Column(GUID, ForeignKey("book_copies.id", ondelete="CASCADE"), primary_key=True)
+    changed_by = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"))
+    reason = Column(String(300))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
 
 
 class Loan(db.Model):

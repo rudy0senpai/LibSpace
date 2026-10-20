@@ -1,8 +1,11 @@
 import os
 import uuid
+import json
+import re
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from pathlib import Path
+from urllib.parse import urlparse
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
@@ -12,11 +15,13 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash
 from werkzeug.exceptions import HTTPException
+from threading import RLock
 
 from config import Config
-from models import db, User, RoleType, Department, Book, BookCopy, Loan, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author, Publisher, Notification, NotificationType, AuditLog, CoverLookupCache
+from models import db, User, RoleType, Department, Book, BookCopy, BookSourceMetadata, Loan, Reservation, ReservationStatus, Suggestion, SuggestionVote, Category, CopyStatus, LoanStatus, SuggestionStatus, SuggestionReason, Author, Publisher, Notification, NotificationType, AuditLog, CoverLookupCache, BookAvailabilityHold
 from cover_service import cover_service
 from identity import canonicalize_name, canonicalize_role, canonicalize_user_id
+from librarian_analytics import get_librarian_analytics
 
 BACKEND_INSTANCE_DIR = Path(__file__).resolve().parent / "instance"
 BACKEND_INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
@@ -89,6 +94,8 @@ SUGGESTION_STATUSES = {
     "SUBMITTED", "UNDER_REVIEW", "APPROVED", "ORDERED",
     "AVAILABLE", "REJECTED", "DUPLICATE", "ALREADY_AVAILABLE"
 }
+suggestion_vote_lock = RLock()
+availability_update_lock = RLock()
 
 
 def month_bucket(column):
@@ -646,25 +653,16 @@ def librarian_dashboard():
         return jsonify({"status": "error", "error": {
             "code": "FORBIDDEN", "message": "Insufficient permissions"
         }}), 403
-
-    summary = {
-        "total_books": db.session.query(func.count(Book.id)).scalar() or 0,
-        "total_copies": db.session.query(func.count(BookCopy.id)).scalar() or 0,
-        "available_copies": db.session.query(func.count(BookCopy.id)).filter(
-            BookCopy.status == CopyStatus.AVAILABLE
-        ).scalar() or 0,
-        "borrowed_copies": db.session.query(func.count(BookCopy.id)).filter(
-            BookCopy.status == CopyStatus.BORROWED
-        ).scalar() or 0,
-        "overdue_loans": db.session.query(func.count(Loan.id)).filter(
-            Loan.status == LoanStatus.OVERDUE
-        ).scalar() or 0,
-        "suggestion_votes": db.session.query(func.count(SuggestionVote.suggestion_id)).scalar() or 0,
-    }
-    return jsonify({"status": "success", "data": {
-        "summary": summary,
-        "meta": {"source": f"{db.engine.dialect.name.upper()} Database"},
-    }}), 200
+    try:
+        data = get_librarian_analytics(
+            request.args.get("start_date") or None,
+            request.args.get("end_date") or None,
+        )
+    except ValueError as error:
+        return jsonify({"status": "error", "error": {
+            "code": "INVALID_ANALYTICS_RANGE", "message": str(error)
+        }}), 422
+    return jsonify({"status": "success", "data": data}), 200
 
 
 @app.route("/api/librarian/users", methods=["GET"])
@@ -890,7 +888,7 @@ def search_books():
                 "total": len(copies),
                 "rack": copies[0].rack if copies else "",
                 "shelf": copies[0].shelf if copies else "",
-                "description": book.description or "",
+                "description": (_book_source_and_description(book)[0] or ""),
                 "publication_year": book.publication_year,
                 "edition": book.edition or "",
                 "language": book.language or "",
@@ -927,9 +925,10 @@ def book_cover_lookup(book_id):
     if not book:
         return jsonify({"status": "error", "error": {"code": "BOOK_NOT_FOUND", "message": "Book was not found."}}), 404
     refresh = request.args.get("refresh", "").strip().lower() in {"1", "true", "yes"}
+    reported_failure = request.args.get("failed", "").strip().lower() in {"1", "true", "yes"}
     if refresh and user.role not in {RoleType.LIBRARIAN, RoleType.ADMIN}:
         return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Only library staff can refresh a cached cover lookup."}}), 403
-    result = cover_service.lookup(book, db.session, CoverLookupCache, refresh=refresh)
+    result = cover_service.lookup(book, db.session, CoverLookupCache, refresh=refresh, reported_failure=reported_failure)
     return jsonify({"status": "success", "data": {
         "book_id": str(book.id), "cover_url": result.get("cover_url"),
         "source": result.get("source"), "matched": bool(result.get("matched")),
@@ -1231,42 +1230,99 @@ def create_suggestion():
 @app.route("/api/suggestions/<suggestion_id>/vote", methods=["POST"])
 @jwt_required()
 def vote_suggestion(suggestion_id):
+    with suggestion_vote_lock:
+        return _toggle_suggestion_vote(suggestion_id)
+
+
+def _toggle_suggestion_vote(suggestion_id):
     try:
+        # Take SQLite's write reservation before reading vote state so concurrent
+        # toggles serialize instead of both observing the same stale value.
+        if db.engine.dialect.name == "sqlite":
+            db.session.execute(text("BEGIN IMMEDIATE"))
+
         user = authenticated_active_user()
         if not user:
+            db.session.rollback()
             return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
         suggestion = db.session.get(Suggestion, suggestion_id)
         if not suggestion:
+            db.session.rollback()
             return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Suggestion not found."}}), 404
 
-        existing = db.session.query(SuggestionVote).filter(
+        removed = db.session.query(SuggestionVote).filter(
             SuggestionVote.suggestion_id == suggestion.id,
             SuggestionVote.user_id == user.id,
-        ).first()
-        if existing:
-            vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
-                SuggestionVote.suggestion_id == suggestion.id
-            ).scalar() or 0
-            return jsonify({"status": "success", "data": {"voted": True, "vote_count": vote_count}}), 200
-
-        db.session.add(SuggestionVote(suggestion_id=suggestion.id, user_id=user.id))
-        try:
-            db.session.commit()
-        except IntegrityError:
-            db.session.rollback()
-            vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
-                SuggestionVote.suggestion_id == suggestion.id
-            ).scalar() or 0
-            return jsonify({"status": "success", "data": {"voted": True, "vote_count": vote_count}}), 200
+        ).delete(synchronize_session=False)
+        if removed:
+            voted = False
+        else:
+            db.session.add(SuggestionVote(suggestion_id=suggestion.id, user_id=user.id))
+            db.session.flush()
+            voted = True
 
         vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
             SuggestionVote.suggestion_id == suggestion.id
         ).scalar() or 0
-        return jsonify({"status": "success", "data": {"voted": True, "vote_count": vote_count}}), 200
+        db.session.commit()
+        return jsonify({"status": "success", "data": {"voted": voted, "vote_count": vote_count}}), 200
+    except IntegrityError:
+        db.session.rollback()
+        # The composite primary key remains the final guard against duplicate
+        # rows if another database writer wins a concurrent insert.
+        try:
+            user = authenticated_active_user()
+            suggestion = db.session.get(Suggestion, suggestion_id)
+            if user and suggestion:
+                voted = db.session.query(SuggestionVote.suggestion_id).filter_by(
+                    suggestion_id=suggestion.id, user_id=user.id
+                ).first() is not None
+                vote_count = db.session.query(func.count(SuggestionVote.user_id)).filter(
+                    SuggestionVote.suggestion_id == suggestion.id
+                ).scalar() or 0
+                return jsonify({"status": "success", "data": {"voted": voted, "vote_count": vote_count}}), 200
+        except Exception:
+            db.session.rollback()
+        return jsonify({"status": "error", "error": {"code": "VOTE_FAILED", "message": "Unable to submit this vote."}}), 500
     except Exception:
         db.session.rollback()
         app.logger.exception("Vote failed")
         return jsonify({"status": "error", "error": {"code": "VOTE_FAILED", "message": "Unable to submit this vote."}}), 500
+
+
+def _book_source_and_description(book):
+    description = book.description or ""
+    source_metadata = {}
+    if book.source_metadata:
+        try:
+            source_metadata = json.loads(book.source_metadata.metadata_json)
+        except (TypeError, json.JSONDecodeError):
+            source_metadata = {"source_name": book.source_metadata.source_name}
+    prefix = "[Academic CSV provenance: "
+    if description.startswith(prefix):
+        raw = description[len(prefix):].rstrip("]")
+        try:
+            source_metadata = source_metadata or json.loads(raw)
+        except json.JSONDecodeError:
+            source_metadata = source_metadata or {"source_name": "Academic CSV provenance"}
+        description = ""
+    return description or None, source_metadata
+
+
+def serialize_librarian_book(book):
+    description, source_metadata = _book_source_and_description(book)
+    return {
+        "id": str(book.id), "title": book.title, "subtitle": book.subtitle, "isbn": book.isbn,
+        "authors": [author.name for author in book.authors], "description": description,
+        "publication_year": book.publication_year, "edition": book.edition, "language": book.language,
+        "publisher": book.publisher.name if book.publisher else None,
+        "category": book.category.name if book.category else None,
+        "cover_image_ref": book.cover_image_ref,
+        "departments": [{"id": str(department.id), "name": department.name, "code": department.code} for department in book.departments],
+        "source_metadata": source_metadata,
+        "copies": [{"id": str(copy.id), "accession_number": copy.accession_number, "barcode": copy.barcode,
+                    "rack": copy.rack, "shelf": copy.shelf, "status": copy.status.value} for copy in book.copies],
+    }
 
 
 @app.route("/api/librarian/catalogue", methods=["GET"])
@@ -1291,14 +1347,7 @@ def librarian_catalogue():
         query = query.filter(or_(Book.title.ilike(f"%{term}%"), Book.isbn.ilike(f"%{term}%"), Book.authors.any(Author.name.ilike(f"%{term}%"))))
     total = query.count()
     books = query.order_by(Book.title.asc(), Book.id.asc()).offset((page - 1) * per_page).limit(per_page).all()
-    def serialize_book(book):
-        return {"id": str(book.id), "title": book.title, "subtitle": book.subtitle, "isbn": book.isbn,
-                "authors": [a.name for a in book.authors], "description": book.description,
-                "publication_year": book.publication_year, "publisher": book.publisher.name if book.publisher else None,
-                "category": book.category.name if book.category else None,
-                "copies": [{"id": str(c.id), "accession_number": c.accession_number, "barcode": c.barcode,
-                            "rack": c.rack, "shelf": c.shelf, "status": c.status.value} for c in book.copies]}
-    return jsonify({"status": "success", "data": {"items": [serialize_book(b) for b in books], "total": total, "page": page, "per_page": per_page}}), 200
+    return jsonify({"status": "success", "data": {"items": [serialize_librarian_book(book) for book in books], "total": total, "page": page, "per_page": per_page}}), 200
 
 
 def require_librarian():
@@ -1333,6 +1382,13 @@ def librarian_create_book():
     except (TypeError, ValueError): return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be an integer from 1400 to 2100."}}), 422
     if year is not None and not 1400 <= year <= 2100:
         return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be from 1400 to 2100."}}), 422
+    edition = str(data.get("edition", "") or "").strip()
+    language = str(data.get("language", "English") or "").strip() or "English"
+    cover_ref = str(data.get("cover_image_ref", "") or "").strip()
+    if len(edition) > 80 or len(language) > 80:
+        return jsonify({"status": "error", "error": {"code": "INVALID_METADATA", "message": "Edition and language must be 80 characters or fewer."}}), 422
+    if len(cover_ref) > 500 or (cover_ref and (urlparse(cover_ref).scheme not in {"http", "https"} or not urlparse(cover_ref).netloc)):
+        return jsonify({"status": "error", "error": {"code": "INVALID_COVER_URL", "message": "Cover URL must be an HTTP(S) URL no longer than 500 characters."}}), 422
     if isbn and not valid_isbn(isbn):
         return jsonify({"status": "error", "error": {"code": "INVALID_ISBN", "message": "ISBN checksum is invalid; provide a valid ISBN-10 or ISBN-13."}}), 422
     if isbn and db.session.query(Book.id).filter(func.replace(func.replace(Book.isbn, "-", ""), " ", "") == isbn).first():
@@ -1344,7 +1400,7 @@ def librarian_create_book():
         category = db.session.query(Category).filter(func.lower(Category.name) == category_name.lower()).first() if category_name else None
         book = Book(title=title, isbn=isbn or None, subtitle=(str(data.get("subtitle", "")).strip() or None),
                     description=(str(data.get("description", "")).strip() or None),
-                    publication_year=year, language=(str(data.get("language", "English")).strip() or "English"),
+                    publication_year=year, edition=edition or None, language=language, cover_image_ref=cover_ref or None,
                     publisher=publisher or (Publisher(name=publisher_name) if publisher_name else None),
                     category=category or (Category(name=category_name) if category_name else None))
         db.session.add(book); db.session.flush()
@@ -1353,6 +1409,15 @@ def librarian_create_book():
             if name:
                 author = db.session.query(Author).filter(func.lower(Author.name) == name.lower()).first() or Author(name=name)
                 book.authors.append(author)
+        for value in data.get("departments", []):
+            if not isinstance(value, str):
+                raise ValueError("Departments must be names or codes.")
+            department = db.session.query(Department).filter(or_(func.lower(Department.name) == value.strip().lower(), func.lower(Department.code) == value.strip().lower())).first()
+            if not department:
+                db.session.rollback()
+                return jsonify({"status": "error", "error": {"code": "UNKNOWN_DEPARTMENT", "message": f"Unknown programme/department: {value}."}}), 422
+            if department not in book.departments:
+                book.departments.append(department)
         db.session.commit()
         return jsonify({"status": "success", "data": {"id": str(book.id), "title": book.title}}), 201
     except Exception:
@@ -1365,40 +1430,204 @@ def librarian_create_book():
 @jwt_required()
 def librarian_update_book(book_id):
     user, error = require_librarian()
-    if error: return error
+    if error:
+        return error
     book = db.session.get(Book, book_id)
-    if not book: return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Book not found."}}), 404
+    if not book:
+        return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Book not found."}}), 404
     data = request.get_json(silent=True) or {}
-    if "title" in data:
-        title = str(data["title"]).strip()
-        if not title: return jsonify({"status": "error", "error": {"code": "INVALID_BOOK", "message": "Title cannot be empty."}}), 422
-        book.title = title
-    for field in ("subtitle", "description", "publication_year", "language"):
-        if field in data: setattr(book, field, data[field])
-    if "publication_year" in data:
-        try: year = int(data["publication_year"]) if data["publication_year"] not in (None, "") else None
-        except (TypeError, ValueError): return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be an integer from 1400 to 2100."}}), 422
-        if year is not None and not 1400 <= year <= 2100: return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be from 1400 to 2100."}}), 422
-        book.publication_year = year
-    for field, model, relation in (("publisher", Publisher, "publisher"), ("category", Category, "category")):
-        if field in data:
-            value = str(data[field] or "").strip()
-            entry = db.session.query(model).filter(func.lower(model.name) == value.lower()).first() if value else None
-            if value and not entry: entry = model(name=value)
-            setattr(book, relation, entry)
-    if "isbn" in data:
-        isbn = str(data["isbn"]).replace("-", "").replace(" ", "").strip()
-        if isbn and not valid_isbn(isbn): return jsonify({"status": "error", "error": {"code": "INVALID_ISBN", "message": "ISBN checksum is invalid; provide a valid ISBN-10 or ISBN-13."}}), 422
-        duplicate = db.session.query(Book.id).filter(Book.isbn == (isbn or None), Book.id != book.id).first() if isbn else None
-        if duplicate: return jsonify({"status": "error", "error": {"code": "DUPLICATE_ISBN", "message": "A book with this ISBN already exists."}}), 409
-        book.isbn = isbn or None
-    if "authors" in data:
-        book.authors.clear()
-        for name in data["authors"]:
-            name = str(name).strip()
-            if name: book.authors.append(db.session.query(Author).filter(func.lower(Author.name) == name.lower()).first() or Author(name=name))
-    db.session.commit()
-    return jsonify({"status": "success", "data": {"id": str(book.id), "title": book.title}}), 200
+    if not isinstance(data, dict):
+        return jsonify({"status": "error", "error": {"code": "INVALID_INPUT", "message": "A JSON object is required."}}), 422
+
+    title = str(data.get("title", book.title) or "").strip()
+    if not title or len(title) > 300:
+        return jsonify({"status": "error", "error": {"code": "INVALID_BOOK", "message": "Title is required (maximum 300 characters)."}}), 422
+    isbn = re.sub(r"[-\s]", "", str(data.get("isbn", book.isbn or ""))).upper()
+    if isbn and not valid_isbn(isbn):
+        return jsonify({"status": "error", "error": {"code": "INVALID_ISBN", "message": "ISBN checksum is invalid; provide a valid ISBN-10 or ISBN-13."}}), 422
+    if isbn:
+        existing_isbns = db.session.query(Book.id, Book.isbn).filter(Book.id != book.id, Book.isbn.isnot(None)).all()
+        if any(re.sub(r"[-\s]", "", existing_isbn).upper() == isbn for _, existing_isbn in existing_isbns):
+            return jsonify({"status": "error", "error": {"code": "DUPLICATE_ISBN", "message": "That ISBN already belongs to another book."}}), 409
+    try:
+        year_value = data.get("publication_year", book.publication_year)
+        year = int(year_value) if year_value not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be an integer from 1400 to 2100."}}), 422
+    if year is not None and not 1400 <= year <= 2100:
+        return jsonify({"status": "error", "error": {"code": "INVALID_YEAR", "message": "Publication year must be from 1400 to 2100."}}), 422
+
+    edition = str(data.get("edition", book.edition or "") or "").strip()
+    language = str(data.get("language", book.language or "English") or "").strip()
+    cover_ref = str(data.get("cover_image_ref", book.cover_image_ref or "") or "").strip()
+    if len(edition) > 80 or len(language) > 80:
+        return jsonify({"status": "error", "error": {"code": "INVALID_METADATA", "message": "Edition and language must be 80 characters or fewer."}}), 422
+    if len(cover_ref) > 500 or (cover_ref and (urlparse(cover_ref).scheme not in {"http", "https"} or not urlparse(cover_ref).netloc)):
+        return jsonify({"status": "error", "error": {"code": "INVALID_COVER_URL", "message": "Cover URL must be an HTTP(S) URL no longer than 500 characters."}}), 422
+
+    publisher_name = str(data.get("publisher", book.publisher.name if book.publisher else "") or "").strip()
+    category_name = str(data.get("category", book.category.name if book.category else "") or "").strip()
+    author_values = data.get("authors", [author.name for author in book.authors])
+    if isinstance(author_values, str):
+        author_values = [part.strip() for part in author_values.split(",")]
+    if not isinstance(author_values, list) or len(author_values) > 50 or any(not isinstance(value, str) or len(value.strip()) > 180 for value in author_values):
+        return jsonify({"status": "error", "error": {"code": "INVALID_AUTHORS", "message": "Authors must be a list of up to 50 names (180 characters each)."}}), 422
+    description = data.get("description", book.description)
+    if description is not None and not isinstance(description, str):
+        return jsonify({"status": "error", "error": {"code": "INVALID_DESCRIPTION", "message": "Description must be text."}}), 422
+
+    department_values = data.get("departments")
+    departments = None
+    if department_values is not None:
+        if not isinstance(department_values, list) or len(department_values) > 30:
+            return jsonify({"status": "error", "error": {"code": "INVALID_DEPARTMENTS", "message": "Departments must be a list of known programme names or codes."}}), 422
+        departments = []
+        for value in department_values:
+            if not isinstance(value, str):
+                return jsonify({"status": "error", "error": {"code": "INVALID_DEPARTMENTS", "message": "Departments must be names or codes."}}), 422
+            department = db.session.query(Department).filter(or_(func.lower(Department.name) == value.strip().lower(), func.lower(Department.code) == value.strip().lower())).first()
+            if not department:
+                return jsonify({"status": "error", "error": {"code": "UNKNOWN_DEPARTMENT", "message": f"Unknown programme/department: {value}."}}), 422
+            if department not in departments:
+                departments.append(department)
+
+    try:
+        book.title, book.isbn = title, isbn or None
+        book.publication_year, book.edition = year, edition or None
+        book.language = language or "English"
+        book.cover_image_ref = cover_ref or None
+        book.description = description.strip() or None if description is not None else None
+        if "publisher" in data:
+            publisher = db.session.query(Publisher).filter(func.lower(Publisher.name) == publisher_name.lower()).first() if publisher_name else None
+            book.publisher = publisher or (Publisher(name=publisher_name) if publisher_name else None)
+        if "category" in data:
+            category = db.session.query(Category).filter(func.lower(Category.name) == category_name.lower()).first() if category_name else None
+            book.category = category or (Category(name=category_name) if category_name else None)
+        if "authors" in data:
+            resolved_authors = []
+            for name in author_values:
+                name = name.strip()
+                if name:
+                    author = db.session.query(Author).filter(func.lower(Author.name) == name.lower()).first() or Author(name=name)
+                    if author not in resolved_authors:
+                        resolved_authors.append(author)
+            book.authors[:] = resolved_authors
+        if departments is not None:
+            book.departments[:] = departments
+        db.session.commit()
+        db.session.refresh(book)
+        return jsonify({"status": "success", "data": serialize_librarian_book(book)}), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"status": "error", "error": {"code": "DUPLICATE_ISBN", "message": "That ISBN already belongs to another book."}}), 409
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Catalogue metadata update failed")
+        return jsonify({"status": "error", "error": {"code": "UPDATE_BOOK_FAILED", "message": "Unable to save book metadata."}}), 500
+
+
+@app.route("/api/librarian/catalogue/<book_id>/availability", methods=["GET", "PATCH"])
+@jwt_required()
+def librarian_book_availability(book_id):
+    user, error = require_librarian()
+    if error:
+        return error
+    user_id = user.id
+
+    def response_data(book):
+        copies = db.session.query(BookCopy).filter_by(book_id=book.id).all()
+        counts = {status.value.lower(): sum(copy.status == status for copy in copies) for status in CopyStatus}
+        available = counts.get("available", 0)
+        held = db.session.query(BookAvailabilityHold).join(BookCopy, BookAvailabilityHold.book_copy_id == BookCopy.id).filter(BookCopy.book_id == book.id).count()
+        active_loans = db.session.query(func.count(Loan.id)).join(BookCopy, Loan.book_copy_id == BookCopy.id).filter(
+            BookCopy.book_id == book.id, Loan.status.in_([LoanStatus.REQUESTED, LoanStatus.APPROVED, LoanStatus.BORROWED, LoanStatus.OVERDUE])
+        ).scalar() or 0
+        active_reservations = db.session.query(func.count(Reservation.id)).filter(
+            Reservation.book_id == book.id, Reservation.status == ReservationStatus.ACTIVE
+        ).scalar() or 0
+        return {"book_id": str(book.id), "title": book.title, "isbn": book.isbn,
+                "total_copies": len(copies), "available_copies": available,
+                "borrowed_copies": counts.get("borrowed", 0), "reserved_copies": counts.get("reserved", 0),
+                "active_reservations": active_reservations,
+                "maintenance_copies": counts.get("maintenance", 0), "withdrawn_copies": counts.get("withdrawn", 0),
+                "active_loan_count": active_loans, "held_copies": held,
+                "availability_status": "AVAILABLE" if available else "NOT_AVAILABLE",
+                "can_restore": held > 0, "can_withdraw": available > 0,
+                "copy_states": [{"id": str(copy.id), "status": copy.status.value, "accession_number": copy.accession_number,
+                                 "barcode": copy.barcode, "rack": copy.rack, "shelf": copy.shelf} for copy in copies]}
+
+    if request.method == "GET":
+        book = db.session.get(Book, book_id)
+        if not book:
+            return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Book not found."}}), 404
+        return jsonify({"status": "success", "data": response_data(book)}), 200
+
+    with availability_update_lock:
+        try:
+            if db.engine.dialect.name == "sqlite":
+                db.session.rollback()
+                db.session.execute(text("BEGIN IMMEDIATE"))
+            book = db.session.query(Book).filter(Book.id == book_id).with_for_update().first()
+            if not book:
+                db.session.rollback()
+                return jsonify({"status": "error", "error": {"code": "NOT_FOUND", "message": "Book not found."}}), 404
+            data = request.get_json(silent=True) or {}
+            target = data.get("available")
+            if not isinstance(target, bool):
+                db.session.rollback()
+                return jsonify({"status": "error", "error": {"code": "INVALID_AVAILABILITY", "message": "available must be true or false."}}), 422
+            reason = str(data.get("reason", "") or "").strip()
+            if len(reason) > 300:
+                db.session.rollback()
+                return jsonify({"status": "error", "error": {"code": "INVALID_REASON", "message": "Reason must be 300 characters or fewer."}}), 422
+            copies = db.session.query(BookCopy).filter_by(book_id=book.id).with_for_update().all()
+            if target is False:
+                eligible = [copy for copy in copies if copy.status == CopyStatus.AVAILABLE]
+                active_reservation = db.session.query(Reservation.id).filter(
+                    Reservation.book_id == book.id, Reservation.status == ReservationStatus.ACTIVE
+                ).first()
+                if eligible and active_reservation:
+                    db.session.rollback()
+                    return jsonify({"status": "error", "error": {"code": "COPY_COMMITTED", "message": "An active reservation prevents making copies unavailable."}}), 409
+                for copy in eligible:
+                    committed = db.session.query(Loan.id).filter(
+                        Loan.book_copy_id == copy.id,
+                        Loan.status.in_([LoanStatus.REQUESTED, LoanStatus.APPROVED, LoanStatus.BORROWED, LoanStatus.OVERDUE]),
+                    ).first()
+                    if committed:
+                        db.session.rollback()
+                        return jsonify({"status": "error", "error": {"code": "COPY_COMMITTED", "message": "A copy with an active loan/request cannot be made unavailable."}}), 409
+                for copy in eligible:
+                    copy.status = CopyStatus.MAINTENANCE
+                    db.session.add(BookAvailabilityHold(book_copy_id=copy.id, changed_by=user_id, reason=reason or None))
+            else:
+                held_copies = db.session.query(BookCopy).join(BookAvailabilityHold, BookAvailabilityHold.book_copy_id == BookCopy.id).filter(
+                    BookCopy.book_id == book.id, BookCopy.status == CopyStatus.MAINTENANCE
+                ).with_for_update().all()
+                if not held_copies and not any(copy.status == CopyStatus.AVAILABLE for copy in copies):
+                    db.session.rollback()
+                    return jsonify({"status": "error", "error": {"code": "NO_RESTORABLE_COPIES", "message": "No copies are available to restore. Add or repair an individual copy first."}}), 409
+                for copy in held_copies:
+                    has_active_loan = db.session.query(Loan.id).filter(
+                        Loan.book_copy_id == copy.id,
+                        Loan.status.in_([LoanStatus.REQUESTED, LoanStatus.APPROVED, LoanStatus.BORROWED, LoanStatus.OVERDUE]),
+                    ).first()
+                    if has_active_loan:
+                        db.session.rollback()
+                        return jsonify({"status": "error", "error": {"code": "COPY_COMMITTED", "message": "A held copy has an active loan/request and cannot be made available."}}), 409
+                    copy.status = CopyStatus.AVAILABLE
+                    db.session.delete(db.session.get(BookAvailabilityHold, copy.id))
+            db.session.flush()
+            db.session.add(AuditLog(actor_user_id=user_id, action="BOOK_AVAILABILITY_CHANGED", entity_type="Book", entity_id=book.id,
+                                    details={"available": target, "reason": reason or None, "copies_changed": len(eligible) if target is False else len(held_copies)}))
+            db.session.commit()
+            db.session.expire_all()
+            book = db.session.get(Book, book_id)
+            return jsonify({"status": "success", "data": response_data(book)}), 200
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Book availability update failed")
+            return jsonify({"status": "error", "error": {"code": "AVAILABILITY_UPDATE_FAILED", "message": "Unable to update copy availability."}}), 500
 
 
 @app.route("/api/librarian/catalogue/<book_id>/copies", methods=["POST"])
@@ -1426,6 +1655,15 @@ def librarian_loans():
     if error: return error
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip().upper()
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 20))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page and per_page must be integers."}}), 422
+    if page < 1 or per_page < 1 or per_page > 100:
+        return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page must be positive and per_page must be between 1 and 100."}}), 422
+    if len(q) > 200:
+        return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "Search is too long."}}), 422
     query = db.session.query(Loan).join(User, Loan.user_id == User.id).join(BookCopy).join(Book)
     if status == "OVERDUE": query = query.filter(or_(Loan.status == LoanStatus.OVERDUE, (Loan.status == LoanStatus.BORROWED) & (Loan.due_at < datetime.utcnow())))
     elif status == "ACTIVE": query = query.filter(Loan.status.in_((LoanStatus.BORROWED, LoanStatus.OVERDUE)))
@@ -1434,11 +1672,24 @@ def librarian_loans():
             return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "Unknown loan status."}}), 422
         query = query.filter(Loan.status == LoanStatus(status))
     if q: query = query.filter(or_(User.name.ilike(f"%{q}%"), User.enrollment_id.ilike(f"%{q}%"), User.employee_id.ilike(f"%{q}%"), Book.title.ilike(f"%{q}%")))
-    loans = query.order_by(Loan.due_at.asc()).limit(500).all()
-    return jsonify({"status": "success", "data": [{"id": str(l.id), "book_title": l.book_copy.book.title, "borrower": l.user.name,
-        "user_id": l.user.enrollment_id if l.user.role == RoleType.STUDENT else l.user.employee_id, "issued_at": l.issued_at.isoformat(),
-        "due_at": l.due_at.isoformat(), "status": "OVERDUE" if l.status == LoanStatus.BORROWED and l.due_at < datetime.utcnow() else l.status.value,
-        "copy_id": str(l.book_copy.id), "accession_number": l.book_copy.accession_number} for l in loans]}), 200
+    total = query.count()
+    loans = query.order_by(Loan.due_at.asc(), Loan.id.asc()).offset((page - 1) * per_page).limit(per_page).all()
+    now = datetime.utcnow()
+    items = [{
+        "id": str(loan.id),
+        "book_title": loan.book_copy.book.title,
+        "cover_image_ref": loan.book_copy.book.cover_image_ref,
+        "borrower": loan.user.name,
+        "user_id": loan.user.enrollment_id if loan.user.role == RoleType.STUDENT else loan.user.employee_id,
+        "issued_at": loan.issued_at.isoformat(),
+        "due_at": loan.due_at.isoformat(),
+        "status": "OVERDUE" if loan.status == LoanStatus.BORROWED and loan.due_at < now else loan.status.value,
+        "copy_id": str(loan.book_copy.id),
+        "accession_number": loan.book_copy.accession_number,
+    } for loan in loans]
+    return jsonify({"status": "success", "data": {
+        "items": items, "total": total, "page": page, "per_page": per_page,
+    }}), 200
 
 
 @app.route("/api/librarian/loans/<loan_id>/return", methods=["POST"])
@@ -1472,15 +1723,47 @@ def librarian_suggestions():
     if error: return error
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip().upper()
-    query = db.session.query(Suggestion)
-    if q: query = query.filter(Suggestion.title.ilike(f"%{q}%"))
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 20))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page and per_page must be integers."}}), 422
+    if page < 1 or per_page < 1 or per_page > 100:
+        return jsonify({"status": "error", "error": {"code": "INVALID_PAGINATION", "message": "page must be positive and per_page must be between 1 and 100."}}), 422
+    if len(q) > 200:
+        return jsonify({"status": "error", "error": {"code": "INVALID_FILTER", "message": "Search is too long."}}), 422
+    query = db.session.query(Suggestion).join(User, Suggestion.submitted_by == User.id)
+    if q:
+        query = query.filter(or_(Suggestion.title.ilike(f"%{q}%"), Suggestion.author.ilike(f"%{q}%"), User.name.ilike(f"%{q}%")))
     if status:
         if status not in {x.value for x in SuggestionStatus}: return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "Unknown suggestion status."}}), 422
         query = query.filter(Suggestion.status == SuggestionStatus(status))
-    rows = query.order_by(Suggestion.created_at.desc()).limit(500).all()
-    return jsonify({"status": "success", "data": {"items": [{"id": str(s.id), "title": s.title, "author": s.author, "status": s.status.value,
-        "submitted_at": s.created_at.isoformat(), "requester": s.submitted_by_user.name, "requester_role": s.submitted_by_user.role.value,
-        "votes": db.session.query(func.count(SuggestionVote.user_id)).filter_by(suggestion_id=s.id).scalar() or 0} for s in rows]}}), 200
+    total = query.count()
+    rows = query.options(joinedload(Suggestion.submitted_by_user).joinedload(User.department)).order_by(
+        Suggestion.created_at.desc(), Suggestion.id.asc()
+    ).offset((page - 1) * per_page).limit(per_page).all()
+    suggestion_ids = [row.id for row in rows]
+    vote_counts = {}
+    if suggestion_ids:
+        vote_counts = dict(db.session.query(
+            SuggestionVote.suggestion_id, func.count(SuggestionVote.user_id)
+        ).filter(SuggestionVote.suggestion_id.in_(suggestion_ids)).group_by(SuggestionVote.suggestion_id).all())
+    items = [{
+        "id": str(suggestion.id),
+        "title": suggestion.title,
+        "author": suggestion.author,
+        "status": suggestion.status.value,
+        "submitted_at": suggestion.created_at.isoformat(),
+        "requester": suggestion.submitted_by_user.name,
+        "requester_role": suggestion.submitted_by_user.role.value,
+        "department": suggestion.submitted_by_user.department.name if suggestion.submitted_by_user.department else None,
+        "reason": suggestion.justification,
+        "reason_type": suggestion.reason.value,
+        "votes": vote_counts.get(suggestion.id, 0),
+    } for suggestion in rows]
+    return jsonify({"status": "success", "data": {
+        "items": items, "total": total, "page": page, "per_page": per_page,
+    }}), 200
 
 
 @app.route("/api/librarian/suggestions/<suggestion_id>/review", methods=["POST"])
@@ -1495,6 +1778,9 @@ def librarian_review_suggestion(suggestion_id):
     except ValueError: return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "Choose a valid suggestion status."}}), 422
     if status not in {SuggestionStatus.UNDER_REVIEW, SuggestionStatus.APPROVED, SuggestionStatus.REJECTED, SuggestionStatus.ORDERED, SuggestionStatus.AVAILABLE}:
         return jsonify({"status": "error", "error": {"code": "INVALID_STATUS", "message": "This review status is not permitted."}}), 422
+    if suggestion.status == status:
+        return jsonify({"status": "success", "data": {"id": str(suggestion.id), "status": status.value,
+            "reviewed_at": suggestion.reviewed_at.isoformat() if suggestion.reviewed_at else None}}), 200
     suggestion.status, suggestion.reviewed_by, suggestion.reviewed_at = status, librarian.id, datetime.utcnow()
     db.session.add(Notification(user_id=suggestion.submitted_by, type=NotificationType.SUGGESTION_STATUS_CHANGED, title="Suggestion updated", message=f"Your suggestion '{suggestion.title}' is now {status.value.replace('_', ' ').lower()}."))
     db.session.commit()

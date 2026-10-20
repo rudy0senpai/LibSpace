@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { getCurrentUser, login as apiLogin } from '../services/authService';
+import { isPortalRole, normalizePortalRole } from '../services/roleRoutes';
 
 const STORAGE_KEY = 'libsphere_session';
 const AuthContext = createContext(null);
@@ -16,10 +17,11 @@ export function AuthProvider({ children }) {
         const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
         if (!cached?.access_token) throw new Error('No saved authentication session');
         const user = await getCurrentUser(cached.access_token);
-        if (!user?.id || !['STUDENT', 'FACULTY', 'DEPARTMENT', 'LIBRARIAN'].includes(user.role)) {
+        const normalizedUser = { ...user, role: normalizePortalRole(user?.role) };
+        if (!normalizedUser?.id || !isPortalRole(normalizedUser.role)) {
           throw new Error('Unsupported or invalid user session');
         }
-        if (active) setSession({ access_token: cached.access_token, user });
+        if (active) setSession({ access_token: cached.access_token, user: normalizedUser });
       } catch (error) {
         if (error?.isNetworkError || error?.status >= 500) {
           if (active) setRestoreError(error.message);
@@ -40,13 +42,15 @@ export function AuthProvider({ children }) {
     if (!next?.access_token || !next?.user) {
       throw new Error('The backend returned an invalid authentication response.');
     }
-    if (!['STUDENT', 'FACULTY', 'DEPARTMENT', 'LIBRARIAN'].includes(next.user.role)) {
+    const normalizedUser = { ...next.user, role: normalizePortalRole(next.user.role) };
+    if (!isPortalRole(normalizedUser.role)) {
       throw new Error('This account is not permitted to use the public portal.');
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    setSession(next);
+    const normalizedSession = { ...next, user: normalizedUser };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedSession));
+    setSession(normalizedSession);
     setRestoreError('');
-    return next;
+    return normalizedSession;
   }, []);
   const signOut = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);

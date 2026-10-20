@@ -11,7 +11,7 @@ from backend.import_academic_textbooks import (
     import_verified, normalize, normalize_isbn, valid_isbn, verify_rows,
 )
 from backend.models import (
-    db, Book, BookCopy, Author, Publisher, Category, Department,
+    db, Book, BookCopy, Author, Publisher, Category, Department, BookSourceMetadata,
     User, Loan, CopyStatus, RoleType, LoanStatus,
 )
 
@@ -77,7 +77,7 @@ class AcademicImportTests(unittest.TestCase):
     def test_import_is_idempotent_and_does_not_create_physical_copies(self):
         row = sample_row()
         record = {'row': row, 'evidence': {'matched': True, 'edition_publishers':['Prentice Hall'], 'edition_publish_date':'1988', 'edition_record_url':'https://openlibrary.org/isbn/9780131103627'}, 'rejected':False, 'reasons':[]}
-        models = (Book, BookCopy, Author, Publisher, Category, Department)
+        models = (Book, BookCopy, Author, Publisher, Category, Department, BookSourceMetadata)
         first = import_verified(self.app, db, models, [record])
         second = import_verified(self.app, db, models, [record])
         self.assertEqual(first['created_books'], 1)
@@ -85,7 +85,12 @@ class AcademicImportTests(unittest.TestCase):
         self.assertEqual(second['matched_existing'], 1)
         self.assertEqual(db.session.query(Book).count(), 1)
         self.assertEqual(db.session.query(BookCopy).count(), 0)
-        self.assertEqual(db.session.query(Book).one().isbn, '9780131103627')
+        imported = db.session.query(Book).one()
+        self.assertEqual(imported.isbn, '9780131103627')
+        self.assertIsNone(imported.description)
+        source = db.session.query(BookSourceMetadata).filter_by(book_id=imported.id).one()
+        self.assertEqual(json.loads(source.metadata_json)['programme'], 'B.Tech AIDS')
+        self.assertEqual(source.source_name, 'LibSphere_Academic_Textbooks_1000.csv')
 
     def test_import_preserves_unrelated_user_and_loan_history(self):
         department = Department(code='CSE', name='Computer Science', short_name='CSE')
@@ -101,7 +106,7 @@ class AcademicImportTests(unittest.TestCase):
 
         row = sample_row()
         record = {'row': row, 'evidence': {'matched': True, 'edition_publishers':['Prentice Hall'], 'edition_publish_date':'1988'}, 'rejected':False, 'reasons':[]}
-        import_verified(self.app, db, (Book, BookCopy, Author, Publisher, Category, Department), [record])
+        import_verified(self.app, db, (Book, BookCopy, Author, Publisher, Category, Department, BookSourceMetadata), [record])
         current = (db.session.query(User).count(), db.session.query(Loan).count(), db.session.query(BookCopy).count(), str(db.session.query(User).filter_by(email='existing@example.test').one().id), str(db.session.query(Loan).one().id))
         self.assertEqual(current, original)
 

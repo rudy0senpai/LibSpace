@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { BookOpen, ChevronDown, Contact, LoaderCircle, UserRound, UsersRound } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import LampThemeToggle from '../../components/auth/LampThemeToggle';
+import { getDashboardRoute } from '../../services/roleRoutes';
 
 const ROLES = [
   ['STUDENT', 'Student'],
@@ -36,13 +37,8 @@ export default function Login() {
     try {
       const credentials = { name: name.trim(), user_id: userId.trim(), role };
       const session = await signIn(credentials);
-      const authenticatedRole = session.user.role;
-      const destination = {
-        STUDENT: 'student',
-        FACULTY: 'teacher',
-        DEPARTMENT: 'department',
-        LIBRARIAN: 'librarian',
-      }[authenticatedRole];
+      const destination = getDashboardRoute(session.user.role);
+      if (!destination) throw new Error('The account role has no dashboard route.');
       window.location.hash = `#/${destination}`;
     } catch (err) {
       setError(err.message || 'Unable to log in. Please try again.');

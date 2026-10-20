@@ -23,8 +23,12 @@ export async function searchBooks(params = {}) {
   return fetchWithAuth(`/api/books/search?${query}`);
 }
 
-export async function lookupBookCover(bookId, { refresh = false } = {}) {
-  const suffix = refresh ? '?refresh=1' : '';
+export async function lookupBookCover(bookId, { refresh = false, failed = false } = {}) {
+  const params = new URLSearchParams();
+  if (refresh) params.set('refresh', '1');
+  if (failed) params.set('failed', '1');
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
   return fetchWithAuth(`/api/books/${encodeURIComponent(bookId)}/cover${suffix}`);
 }
 
@@ -75,6 +79,14 @@ export async function updateCatalogueBook(id, data) {
   return fetchWithAuth(`/api/librarian/catalogue/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
+export async function getCatalogueAvailability(id) {
+  return fetchWithAuth(`/api/librarian/catalogue/${encodeURIComponent(id)}/availability`);
+}
+
+export async function updateCatalogueAvailability(id, data) {
+  return fetchWithAuth(`/api/librarian/catalogue/${encodeURIComponent(id)}/availability`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
 export async function addCatalogueCopy(id, data) {
   return fetchWithAuth(`/api/librarian/catalogue/${encodeURIComponent(id)}/copies`, { method: 'POST', body: JSON.stringify(data) });
 }
@@ -117,7 +129,7 @@ export async function createSuggestion(data) {
 }
 
 export async function voteSuggestion(suggestionId) {
-  return fetchWithAuth(`/api/suggestions/${suggestionId}/vote`, {
+  return fetchWithAuth(`/api/suggestions/${encodeURIComponent(suggestionId)}/vote`, {
     method: 'POST',
   });
 }

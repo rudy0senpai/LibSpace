@@ -6,6 +6,7 @@ import { searchBooks, getMyLoans, getMySuggestions, createSuggestion, voteSugges
 import RequestedBooks from './RequestedBooks';
 import VirtualBookGrid from './VirtualBookGrid';
 import BookCoverCard from '../../components/catalogue/BookCoverCard';
+import { optimisticallyToggleSuggestionVote, applySuggestionVoteResponse, restoreSuggestionVote } from './suggestionVoteState';
 
 export default function UserDashboard() {
   const { user, signOut } = useAuth();
@@ -24,20 +25,27 @@ export default function UserDashboard() {
   const [requestingBookId, setRequestingBookId] = useState('');
   const [cancellingId, setCancellingId] = useState('');
   const [votingIds, setVotingIds] = useState(() => new Set());
+  const votingRequests = useRef(new Set());
+  const suggestionUserId = useRef(user?.id);
   const [categoryFilter, setCategoryFilter] = useState('');
   const [availabilityFilter, setAvailabilityFilter] = useState('');
   const [searchPage, setSearchPage] = useState(1);
   const [searchTotal, setSearchTotal] = useState(0);
   const searchSequence = useRef(0);
+  const suggestionLoadSequence = useRef(0);
   const activeBookIds = useMemo(() => new Set(loans.filter(loan => ['REQUESTED', 'APPROVED', 'BORROWED', 'OVERDUE'].includes(loan.status)).map(loan => loan.book_id)), [loans]);
   const firstName = user?.name?.split(' ')[0] || 'Student';
 
   // Load initial data
   useEffect(() => {
+    suggestionUserId.current = user?.id;
+    setSuggestions([]);
+    setVotingIds(new Set());
+    setError('');
     loadCategories();
     loadMyLoans();
     loadMySuggestions();
-  }, []);
+  }, [user?.id]);
 
   async function loadCategories() {
     try {
@@ -63,11 +71,12 @@ export default function UserDashboard() {
   }
 
   async function loadMySuggestions() {
+    const sequence = ++suggestionLoadSequence.current;
     try {
       const res = await getMySuggestions();
-      setSuggestions(res.data || []);
+      if (sequence === suggestionLoadSequence.current) setSuggestions(res.data || []);
     } catch (e) {
-      setError('Failed to load suggestions');
+      if (sequence === suggestionLoadSequence.current) setError('Failed to load suggestions: ' + e.message);
     }
   }
 
@@ -111,25 +120,34 @@ export default function UserDashboard() {
 
   async function handleVote(suggestionId) {
     const current = suggestions.find(item => item.id === suggestionId);
-    if (!current || current.voted_by_me || votingIds.has(suggestionId)) return;
-    setVotingIds(previous => new Set(previous).add(suggestionId));
-    setSuggestions(previous => previous.map(item => item.id === suggestionId
-      ? { ...item, votes: item.votes + 1, voted_by_me: true }
-      : item));
+    const voterId = user?.id;
+    if (!current || !voterId) return;
+    const requestKey = `${voterId}:${suggestionId}`;
+    if (votingRequests.current.has(requestKey)) return;
+    const previous = { ...current };
+    votingRequests.current.add(requestKey);
+    setVotingIds(previousIds => new Set(previousIds).add(suggestionId));
+    setError('');
+    setSuggestions(items => optimisticallyToggleSuggestionVote(items, suggestionId));
     try {
       const result = await voteSuggestion(suggestionId);
-      setSuggestions(previous => previous.map(item => item.id === suggestionId
-        ? { ...item, votes: result.data.vote_count, voted_by_me: result.data.voted }
-        : item));
+      if (suggestionUserId.current === voterId) {
+        setSuggestions(items => applySuggestionVoteResponse(items, suggestionId, result.data));
+      }
     } catch (e) {
-      await loadMySuggestions();
-      setError('Vote failed: ' + e.message);
+      if (suggestionUserId.current === voterId) {
+        setSuggestions(items => restoreSuggestionVote(items, suggestionId, previous));
+        setError(`Vote failed: ${e.message || 'Please try again.'}`);
+      }
     } finally {
-      setVotingIds(previous => {
-        const next = new Set(previous);
-        next.delete(suggestionId);
-        return next;
-      });
+      votingRequests.current.delete(requestKey);
+      if (suggestionUserId.current === voterId) {
+        setVotingIds(previousIds => {
+          const next = new Set(previousIds);
+          next.delete(suggestionId);
+          return next;
+        });
+      }
     }
   }
 
@@ -216,7 +234,7 @@ export default function UserDashboard() {
           <span>{new Date().toLocaleDateString('en-IN', { dateStyle: 'medium' })}</span>
         </header>
         <section className="prototype-content">
-          {error && <div className="notice error">{error}</div>}
+          {error && <div className="notice error" role="alert">{error}</div>}
 
           {page === 'dashboard' && (
             <>
@@ -338,11 +356,12 @@ export default function UserDashboard() {
                       type="button"
                       className={item.voted_by_me ? 'suggestion-vote voted' : 'suggestion-vote'}
                       aria-pressed={item.voted_by_me}
-                      disabled={item.voted_by_me || votingIds.has(item.id)}
+                      disabled={votingIds.has(item.id)}
                       onClick={() => handleVote(item.id)}
+                      aria-label={`${item.voted_by_me ? 'Remove your vote from' : 'Vote for'} ${item.title}`}
                     >
                       {votingIds.has(item.id) ? <Loader2 size={16} className="spin" /> : <ArrowUp size={16} />}
-                      <b>{item.voted_by_me ? 'Voted' : 'Vote'} · {item.votes}</b>
+                      <b>{item.voted_by_me ? 'Unvote' : 'Vote'} · {item.votes}</b>
                     </button>
                   </div>
                 ))}

@@ -17,7 +17,7 @@ import app as backend  # noqa: E402
 import seed_test_db  # noqa: E402
 from models import (  # noqa: E402
     AuditLog, Author, Book, BookCopy, Category, CopyStatus, Department, Fine, Loan, LoanStatus,
-    Notification, Publisher, Reservation, Suggestion, SuggestionVote, User, RoleType,
+    Notification, Publisher, Reservation, ReservationStatus, Suggestion, SuggestionVote, User, RoleType,
 )
 
 
@@ -339,6 +339,12 @@ class SQLiteSeedTests(unittest.TestCase):
         client = backend.app.test_client()
         student = self._login_token("Urvashi", "25EMCAD016", "STUDENT")
         faculty = self._login_token("Yashdeep", "25TECAD016", "FACULTY")
+        baseline = {
+            "suggestions": {str(row[0]) for row in backend.db.session.query(Suggestion.id).all()},
+            "votes": {(str(row[0]), str(row[1])) for row in backend.db.session.query(SuggestionVote.suggestion_id, SuggestionVote.user_id).all()},
+            "users": {str(row[0]) for row in backend.db.session.query(User.id).all()},
+            "loans": {str(row[0]) for row in backend.db.session.query(Loan.id).all()},
+        }
         suggestion = client.post("/api/suggestions", json={
             "title": "Vote identity isolation", "justification": "Automated test fixture",
             "reason": "COURSE_REQUIREMENT",
@@ -359,6 +365,13 @@ class SQLiteSeedTests(unittest.TestCase):
         finally:
             backend.db.session.query(Suggestion).filter_by(id=suggestion_id).delete(synchronize_session=False)
             backend.db.session.commit()
+        after = {
+            "suggestions": {str(row[0]) for row in backend.db.session.query(Suggestion.id).all()},
+            "votes": {(str(row[0]), str(row[1])) for row in backend.db.session.query(SuggestionVote.suggestion_id, SuggestionVote.user_id).all()},
+            "users": {str(row[0]) for row in backend.db.session.query(User.id).all()},
+            "loans": {str(row[0]) for row in backend.db.session.query(Loan.id).all()},
+        }
+        self.assertEqual(after, baseline)
 
     def test_concurrent_toggles_are_serialized_and_return_authoritative_state(self):
         client = backend.app.test_client()
@@ -489,6 +502,145 @@ class SQLiteSeedTests(unittest.TestCase):
                 backend.db.session.query(BookCopy).filter_by(book_id=book.id).delete()
                 backend.db.session.delete(book)
                 backend.db.session.commit()
+
+    def test_librarian_metadata_serializes_academic_source_separately_and_updates_extended_fields(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        student = client.post("/api/auth/login", json={"name": "Urvashi", "user_id": "25EMCAD016", "role": "STUDENT"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        student_headers = {"Authorization": f"Bearer {student['access_token']}"}
+        marker = uuid.uuid4().hex[:10]
+        book = Book(title=f"Metadata source record {marker}", description='[Academic CSV provenance: {"dataset":"LibSphere_Academic_Textbooks_1000.csv"}]')
+        backend.db.session.add(book)
+        backend.db.session.commit()
+        book_id = str(book.id)
+        baseline_description = book.description
+        try:
+            forbidden = client.patch(f"/api/librarian/catalogue/{book_id}", headers=student_headers, json={"title": "forbidden"})
+            self.assertEqual(forbidden.status_code, 403)
+            listed = client.get(f"/api/librarian/catalogue?q={marker}", headers=headers).get_json()["data"]["items"]
+            self.assertTrue(listed)
+            serialized = listed[0]
+            self.assertNotIn("Academic CSV provenance", serialized.get("description") or "")
+            self.assertEqual(serialized.get("source_metadata", {}).get("dataset"), "LibSphere_Academic_Textbooks_1000.csv")
+            public_search = client.get(f"/api/books/search?q={marker}", headers=student_headers)
+            self.assertEqual(public_search.status_code, 200, public_search.get_json())
+            public_book = public_search.get_json()["data"]["items"][0]
+            self.assertEqual(public_book["description"], "")
+            self.assertNotIn("source_metadata", public_book)
+            updated = client.patch(f"/api/librarian/catalogue/{book_id}", headers=headers, json={
+                "title": book.title + " Updated", "edition": "Test edition", "language": "English",
+                "cover_image_ref": "https://covers.example/test.jpg", "departments": [d.name for d in book.departments],
+            })
+            self.assertEqual(updated.status_code, 200, updated.get_json())
+            backend.db.session.expire_all()
+            saved = backend.db.session.get(Book, book_id)
+            self.assertEqual(saved.edition, "Test edition")
+            self.assertEqual(saved.cover_image_ref, "https://covers.example/test.jpg")
+            self.assertEqual(saved.description, baseline_description)
+        finally:
+            backend.db.session.delete(backend.db.session.get(Book, book_id))
+            backend.db.session.commit()
+
+    def test_catalogue_update_rejects_duplicate_or_invalid_isbn_and_unknown_department(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        marker = uuid.uuid4().hex[:10]
+        def make_isbn(prefix):
+            digits = prefix + f"{uuid.uuid4().int % 10**9:09d}"
+            digits = digits[:12]
+            check = (10 - sum(int(char) * (1 if i % 2 == 0 else 3) for i, char in enumerate(digits)) % 10) % 10
+            return digits + str(check)
+        first = Book(title=f"ISBN candidate {marker}", isbn=make_isbn("978"))
+        second = Book(title=f"ISBN conflict {marker}", isbn=make_isbn("979"))
+        backend.db.session.add_all([first, second]); backend.db.session.commit()
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        try:
+            self.assertEqual(client.patch(f"/api/librarian/catalogue/{first.id}", headers=headers, json={"isbn": "9780306406158"}).status_code, 422)
+            self.assertEqual(client.patch(f"/api/librarian/catalogue/{first.id}", headers=headers, json={"isbn": second.isbn}).status_code, 409)
+            self.assertEqual(client.patch(f"/api/librarian/catalogue/{first.id}", headers=headers, json={"departments": ["NO SUCH PROGRAMME"]}).status_code, 422)
+        finally:
+            backend.db.session.delete(first); backend.db.session.delete(second); backend.db.session.commit()
+
+    def test_availability_management_updates_only_available_copy_rows_and_preserves_loans(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        marker = uuid.uuid4().hex[:10]
+        user = backend.db.session.query(User).filter_by(role=RoleType.STUDENT).first()
+        borrowed = BookCopy(accession_number=f"AVAIL-{marker}-B", barcode=f"AVAIL-{marker}-B", rack="R1", shelf="S1", status=CopyStatus.BORROWED, acquired_at=datetime.utcnow().date())
+        available = BookCopy(accession_number=f"AVAIL-{marker}-A", barcode=f"AVAIL-{marker}-A", rack="R1", shelf="S2", status=CopyStatus.AVAILABLE, acquired_at=datetime.utcnow().date())
+        book = Book(title=f"Availability transaction {marker}", copies=[borrowed, available])
+        backend.db.session.add(book); backend.db.session.flush()
+        now = datetime.utcnow()
+        loan = Loan(user_id=user.id, book_copy_id=borrowed.id, issued_at=now, due_at=now + timedelta(days=14), status=LoanStatus.BORROWED)
+        backend.db.session.add(loan); backend.db.session.commit()
+        book_id = str(book.id)
+        loan_id = loan.id
+        try:
+            initial = client.get(f"/api/librarian/catalogue/{book_id}/availability", headers=headers)
+            self.assertEqual(initial.status_code, 200, initial.get_json())
+            self.assertEqual(initial.get_json()["data"]["total_copies"], 2)
+            self.assertEqual(initial.get_json()["data"]["borrowed_copies"], 1)
+            self.assertEqual(initial.get_json()["data"]["available_copies"], 1)
+            pending = Loan(user_id=user.id, book_copy_id=available.id, issued_at=now, due_at=now + timedelta(days=14), status=LoanStatus.REQUESTED)
+            backend.db.session.add(pending); backend.db.session.commit()
+            blocked = client.patch(f"/api/librarian/catalogue/{book_id}/availability", headers=headers, json={"available": False})
+            self.assertEqual(blocked.status_code, 409, blocked.get_json())
+            self.assertEqual(client.get(f"/api/librarian/catalogue/{book_id}/availability", headers=headers).get_json()["data"]["available_copies"], 1)
+            backend.db.session.delete(pending); backend.db.session.commit()
+            withdrawn = client.patch(f"/api/librarian/catalogue/{book_id}/availability", headers=headers, json={"available": False, "reason": "Inventory check"})
+            self.assertEqual(withdrawn.status_code, 200, withdrawn.get_json())
+            self.assertEqual(withdrawn.get_json()["data"]["available_copies"], 0)
+            self.assertEqual(withdrawn.get_json()["data"]["borrowed_copies"], 1)
+            restored = client.patch(f"/api/librarian/catalogue/{book_id}/availability", headers=headers, json={"available": True})
+            self.assertEqual(restored.status_code, 200, restored.get_json())
+            self.assertEqual(restored.get_json()["data"]["available_copies"], 1)
+            self.assertEqual(backend.db.session.get(Loan, loan_id).status, LoanStatus.BORROWED)
+        finally:
+            backend.db.session.delete(backend.db.session.get(Loan, loan_id))
+            backend.db.session.query(BookCopy).filter_by(book_id=book_id).delete(synchronize_session=False)
+            backend.db.session.delete(backend.db.session.get(Book, book_id))
+            backend.db.session.commit()
+
+    def test_availability_withdrawal_preserves_active_reservations(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        user = backend.db.session.query(User).filter_by(role=RoleType.STUDENT).first()
+        marker = uuid.uuid4().hex[:10]
+        copy = BookCopy(accession_number=f"RES-{marker}", barcode=f"RES-{marker}", rack="R1", shelf="S1", acquired_at=datetime.utcnow().date())
+        book = Book(title=f"Reserved availability {marker}", copies=[copy])
+        backend.db.session.add(book); backend.db.session.flush()
+        reservation = Reservation(user_id=user.id, book_id=book.id, status=ReservationStatus.ACTIVE)
+        backend.db.session.add(reservation); backend.db.session.commit()
+        book_id = str(book.id)
+        try:
+            initial = client.get(f"/api/librarian/catalogue/{book_id}/availability", headers=headers)
+            self.assertEqual(initial.status_code, 200, initial.get_json())
+            self.assertEqual(initial.get_json()["data"]["active_reservations"], 1)
+            blocked = client.patch(f"/api/librarian/catalogue/{book_id}/availability", headers=headers, json={"available": False})
+            self.assertEqual(blocked.status_code, 409, blocked.get_json())
+            self.assertEqual(client.get(f"/api/librarian/catalogue/{book_id}/availability", headers=headers).get_json()["data"]["available_copies"], 1)
+            self.assertEqual(backend.db.session.get(Reservation, reservation.id).status, ReservationStatus.ACTIVE)
+        finally:
+            backend.db.session.delete(reservation)
+            backend.db.session.query(BookCopy).filter_by(book_id=book_id).delete(synchronize_session=False)
+            backend.db.session.delete(backend.db.session.get(Book, book_id)); backend.db.session.commit()
+
+    def test_availability_rejects_no_copy_restoration_and_non_librarian(self):
+        client = backend.app.test_client()
+        librarian = client.post("/api/auth/login", json={"name": "Sphere", "user_id": "25LIB016", "role": "LIBRARIAN"}).get_json()["data"]
+        student = client.post("/api/auth/login", json={"name": "Urvashi", "user_id": "25EMCAD016", "role": "STUDENT"}).get_json()["data"]
+        headers = {"Authorization": f"Bearer {librarian['access_token']}"}
+        book = Book(title=f"No physical copies {uuid.uuid4().hex[:10]}")
+        backend.db.session.add(book); backend.db.session.commit()
+        try:
+            self.assertEqual(client.patch(f"/api/librarian/catalogue/{book.id}/availability", headers=headers, json={"available": True}).status_code, 409)
+            self.assertEqual(client.get(f"/api/librarian/catalogue/{book.id}/availability", headers={"Authorization": f"Bearer {student['access_token']}"}).status_code, 403)
+        finally:
+            backend.db.session.query(BookCopy).filter_by(book_id=book.id).delete(synchronize_session=False)
+            backend.db.session.delete(book); backend.db.session.commit()
 
     def test_catalogue_admin_routes_reject_students(self):
         client = backend.app.test_client()
@@ -716,10 +868,14 @@ class SQLiteSeedTests(unittest.TestCase):
         backend.db.session.add(book)
         backend.db.session.commit()
         original = backend.cover_service.lookup
-        backend.cover_service.lookup = lambda *_args, **_kwargs: {
+        lookup_calls = []
+        def fake_lookup(*_args, **kwargs):
+            lookup_calls.append(kwargs)
+            return {
             "matched": True, "cover_url": "https://covers.example/verified.jpg",
             "source": "openlibrary_isbn", "cached": False,
-        }
+            }
+        backend.cover_service.lookup = fake_lookup
         try:
             client = backend.app.test_client()
             self.assertEqual(client.get(f"/api/books/{book.id}/cover").status_code, 401)
@@ -728,6 +884,9 @@ class SQLiteSeedTests(unittest.TestCase):
             response = client.get(f"/api/books/{book.id}/cover", headers=student_headers)
             self.assertEqual(response.status_code, 200, response.get_json())
             self.assertEqual(response.get_json()["data"]["cover_url"], "https://covers.example/verified.jpg")
+            failed_response = client.get(f"/api/books/{book.id}/cover?failed=1", headers=student_headers)
+            self.assertEqual(failed_response.status_code, 200, failed_response.get_json())
+            self.assertTrue(lookup_calls[-1]["reported_failure"])
             self.assertEqual(client.get("/api/books/not-a-uuid/cover", headers=student_headers).status_code, 404)
             self.assertEqual(client.get(f"/api/books/{book.id}/cover?refresh=1", headers=student_headers).status_code, 403)
             librarian_token = self._login_token("Sphere", "25LIB016", "LIBRARIAN")

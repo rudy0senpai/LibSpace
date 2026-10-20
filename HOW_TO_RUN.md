@@ -217,9 +217,65 @@ From the repository root:
 
 Do not launch a script and a manual server for the same service at the same time.
 
+## Librarian catalogue metadata and availability
+
+The librarian **Manage Catalogue** cards have three separate actions: **Edit metadata** updates bibliographic fields, **Manage availability** changes copy availability, and **Manage copies** adds individual identified copies. Metadata and availability changes are saved through the Flask API; cancelling leaves the database unchanged. Availability totals are derived from `BookCopy` and active `Loan` records, not edited as arbitrary counts. A title with no physical copies remains Not available; add an identified copy through Manage copies before enabling availability. Reducing physical copies below committed/borrowed copies is not offered by the availability dialog.
+
+The API endpoints require a bearer token for an active LIBRARIAN or ADMIN account:
+
+| Method and path | Purpose |
+|---|---|
+| `GET /api/librarian/catalogue?page=&per_page=&q=` | Search/list catalogue records, including clean description and separate `source_metadata`. |
+| `PATCH /api/librarian/catalogue/<book_id>` | Update bibliographic metadata through SQLAlchemy. |
+| `GET /api/librarian/catalogue/<book_id>/availability` | Read copy-state counts and current availability. |
+| `PATCH /api/librarian/catalogue/<book_id>/availability` | Set `{ "available": true|false, "reason": "..." }`; availability changes copy states transactionally. |
+| `POST /api/librarian/catalogue/<book_id>/copies` | Add a physical copy with accession number, barcode, rack, and shelf. |
+
+The backend validates a required title (max 300 characters); ISBN-10/13 checksum and uniqueness (a duplicate returns HTTP 409); publication year 1400–2100; edition/language up to 80 characters; HTTP(S) cover URL up to 500 characters; at most 50 author names of up to 180 characters; text description; and programme/department names or codes that exist. Availability reason is optional and capped at 300 characters. The API returns validation failures in `{status:"error",error:{code,message}}`. A request/loan commitment or an ACTIVE reservation blocks withdrawing available copies. `available_copies` comes from AVAILABLE physical-copy rows, can never be negative or exceed total copies, and a zero-copy title cannot be marked available. Temporary unavailable copies are placed in MAINTENANCE and tracked by `BookAvailabilityHold`; restoration only affects those held copies. SQLite changes use a serialized write transaction. Provenance is stored in `BookSourceMetadata`; recognized legacy provenance text is removed from user-facing descriptions by the additive migration/serializer, and a missing description displays `No description available.`
+
+### Additive SQLite migration (only when needed)
+
+`backend/migrate_catalogue_metadata.py` creates only the `book_source_metadata` and `book_availability_holds` tables and separates recognized legacy provenance. It supports file-backed SQLite only, never resets/reseeds the database, and requires a new explicit backup path. Stop Flask first, confirm `DATABASE_URL` identifies the intended local SQLite file, then run from the repository root:
+
+```powershell
+$python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
+Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+$env:APP_ENV = 'testing'
+$env:DATABASE_URL = 'sqlite:///libsphere_test.db'
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$backup = Join-Path $env:USERPROFILE "T450\DataSets\LibSphere_isbn_repair\backups\libsphere_before_catalogue_migration_$stamp.db"
+& $python .\backend\migrate_catalogue_metadata.py --backup-path $backup
+```
+
+The script creates and verifies the backup before schema/data changes, then verifies SQLite integrity and foreign keys after migration. The backup path must not already exist. Keep the printed backup path for recovery. Do not run this against a production/shared database without a separately approved maintenance plan.
+
+Focused catalogue tests (PowerShell from the repository root):
+
+```powershell
+$python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
+Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+& $python -m unittest discover -s tests -p test_sqlite_seed.py -k availability -v
+& $python -m unittest discover -s tests -p test_sqlite_seed.py -k librarian_metadata -v
+& $python -m unittest discover -s tests -p test_sqlite_seed.py -k catalogue_update_rejects -v
+& $python -m unittest discover -s tests -p test_import_academic_textbooks.py -v
+```
+
+Run the full backend suite from the repository root and frontend checks from `frontend/`:
+
+```powershell
+& $python -m unittest discover -s tests -v
+Push-Location .\frontend
+node --test
+node .\node_modules\vite\bin\vite.js build
+node .\scripts\verify-virtual-grid.mjs
+Pop-Location
+```
+
+The build may emit Vite's existing non-fatal chunk-size advisory; this is separate from build success. Verified 2026-10-20: backend **77 tests passed**, frontend `node --test` **19 passed**, production build passed (2,327 modules; 660.67 kB JS chunk with the advisory), and the virtual-grid check rendered 12/1,000 initial items. Isolated headless Chrome verified metadata and zero-copy availability dialogs at 390, 768, 1366, and 1920 CSS-pixel widths, with visible actions and no horizontal document overflow. Escape/backdrop close, unsaved confirmation, focus wrapping, scroll locking, and invalid ISBN feedback were exercised manually. No browser save was submitted; database persistence and inventory conflict rules were exercised by backend tests.
+
 ## Academic textbook catalogue import
 
-The supplied file is `database/LibSphere_Academic_Textbooks_1000.csv`. Use `backend/import_academic_textbooks.py`; it performs ISBN-10/13 checksum and uniqueness checks, then verifies each ISBN against the ISBN-specific Open Library edition record and compares the title and author before a row is eligible. Publisher/year disagreements are counted and the ISBN edition metadata is preferred in the Book fields; original supplied values and provenance, including the supplied cover URL marked unverified, remain in the book description. A checksum alone never qualifies a row. The importer is idempotent by normalized ISBN, preserves existing records, and does not create `BookCopy` rows because the CSV has no physical-copy identifiers.
+The supplied file is `database/LibSphere_Academic_Textbooks_1000.csv`. Use `backend/import_academic_textbooks.py`; it performs ISBN-10/13 checksum and uniqueness checks, then verifies each ISBN against the ISBN-specific Open Library edition record and compares the title and author before a row is eligible. Publisher/year disagreements are counted and the ISBN edition metadata is preferred in the Book fields; original supplied values and provenance, including the supplied cover URL marked unverified, are stored in `BookSourceMetadata`, separate from the user-facing description. A checksum alone never qualifies a row. The importer is idempotent by normalized ISBN, preserves existing records, and does not create `BookCopy` rows because the CSV has no physical-copy identifiers.
 
 Run the preflight first. It is dry-run by default and reports row/ISBN/duplicate/rejection totals before any DB write:
 
@@ -263,9 +319,9 @@ target.close(); source.close()
 
 ## Cover retrieval, catalogue cards, and UI behavior
 
-`BookCoverCard` uses the authenticated Flask `GET /api/books/<book_id>/cover` endpoint; React never accesses SQLite or requests cover images from providers directly. Cards ask lazily when visible and only when a stored cover is absent. The backend prefers ISBN-specific Open Library edition/Covers results, then Google Books ISBN results with exact ISBN identifiers, then title+author search. Subject/description terms only refine the final search; title and author still must match. Candidate image URLs are checked as image responses. Existing cover references are preserved; the staff-only `?refresh=1` action is an explicit refresh.
+`BookCoverCard` uses the authenticated Flask `GET /api/books/<book_id>/cover` endpoint; React never accesses SQLite or provider APIs directly. Cards request covers lazily near the viewport. The public search serializer's `cover_image_ref` field is the image binding. On an image load error, the card makes one bounded backend retry with `?failed=1`; the service excludes the failed URL, checks alternate providers and returns a new verified match if available. The frontend advances through deduplicated candidates once, then displays the existing 2:3 portrait placeholder. It does not loop on a broken URL. The lookup order is ISBN-specific Open Library, Google Books ISBN (exact ISBN identifier plus matching title/author), then verified Google and Open Library title/author search. Publisher/year/edition are compared when supplied; description/subject terms refine search but cannot substitute for identity. Redirected provider responses are accepted only when the response contains a usable image body, not just HTTP 200. The staff-only `?refresh=1` action remains an explicit refresh, and a failed refresh never overwrites a valid stored URL.
 
-Successful and unsuccessful lookups persist in the additive `cover_lookup_cache` table with source, status, attempt time, and expiry; `db.create_all()` creates this new table but does not migrate existing tables. Defaults are `COVERS_TIMEOUT_SECONDS=5`, `COVERS_RETRIES=2`, `COVERS_MIN_REQUEST_INTERVAL=1`, and `COVERS_FAILED_CACHE_TTL_SECONDS=86400`. Provider requests use backoff, per-process throttling, and in-flight deduplication. The service stores external URLs and attribution/source only; it does not permanently download provider images. Follow Open Library/Google Books terms and attribution policies.
+Successful and unsuccessful lookups persist in the additive `cover_lookup_cache` table with source, status, attempt time, and expiry; `db.create_all()` creates this table without migrating/rebuilding existing tables. Successful matches are cached for 30 days; failures default to a one-day TTL (`COVERS_FAILED_CACHE_TTL_SECONDS=86400`) and are retried after expiry. Defaults are `COVERS_TIMEOUT_SECONDS=5`, `COVERS_RETRIES=2`, and `COVERS_MIN_REQUEST_INTERVAL=1`. Provider requests use bounded exponential backoff, per-process throttling, and in-flight deduplication. Logs include ISBN, provider outcome/status and retry reason without credentials. The service stores external URLs and source attribution only; it does not permanently download provider images. Follow Open Library/Google Books terms and attribution policies. Structured academic-source provenance remains separate from book descriptions; both the API serializer and card suppress the recognized legacy provenance prefix.
 
 Process missing covers progressively (the command is not called at startup):
 
@@ -275,7 +331,7 @@ Process missing covers progressively (the command is not called at startup):
 & $python .\backend\fetch_missing_covers.py --database-url 'sqlite:///libsphere_test.db' --refresh-book-id 'BOOK_UUID'
 ```
 
-The JSON summary includes records processed, covers matched, no reliable matches, failed requests, skips, and cached reuse. Keep batches small; run the command explicitly and verify the target SQLite URL first. A single live authenticated request for imported ISBN `9780195671544` returned a verified Open Library ISBN cover, persisted it to `Book.cover_image_ref` and `cover_lookup_cache`, and a repeat request reported a cached hit; no bulk cover batch was run.
+The JSON summary includes records processed, matched, unresolved, provider-failed, skipped, deferred candidates, and unresolved ISBNs. Keep batches small; run the command explicitly and verify the target SQLite URL first. On 2026-10-20, a backed-up active-catalogue batch processed 10 candidates: 3 verified covers added, 7 unresolved/provider-failed, 80 skipped, and 992 eligible candidates deferred. The three saved URLs were `openlibrary_title_author` matches and each revalidated as an image response. The catalogue changed from 69 to 72 populated cover references; 1,082 books remained, with no reset/reseed/deletion. Backup: `%USERPROFILE%\T450\DataSets\LibSphere_isbn_repair\backups\libsphere_before_cover_repair_20261020_201035.db` (`integrity_check=ok`, zero FK errors). Google Books returned HTTP 429 for the batch (configured default daily quota is zero); several Open Library ISBN edition lookups returned HTTP 404, so unresolved records remain cached for later retry rather than being labeled permanently unavailable. Unresolved ISBNs in this batch: `9781668452127`, `9783110659344`, `9780262082136`, `9798369347614`, `9783031126406`, `9781119694960`, `9789811509803`. This was a bounded batch, not a full-catalogue repair.
 
 Catalogue cover frames reserve a portrait 2:3 ratio and use `object-fit: contain`, lazy loading, and a local placeholder. Shared primary-action colors are `--dashboard-button-bg`, `--dashboard-button-hover`, `--dashboard-button-active`, and `--dashboard-button-ink`; both dark/night and light themes keep button labels at or above 4.5:1 contrast. Focus remains visible, disabled states remain legible, and Request Book is warm amber with dark text. The Notifications sidebar entry is removed for Student, Faculty, Department, and Librarian; the separate header notification feed and backend notification APIs/data remain intact.
 

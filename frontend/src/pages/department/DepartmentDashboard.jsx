@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, BarChart, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
+import { BookOpen, BarChart, Bell, ChevronDown, Clock3, FileDown, Filter, Layers3, Lightbulb, Menu, RefreshCw, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useDepartmentDashboard } from '../../hooks/useDepartmentDashboard';
+import { normalizeDepartmentDashboardResponse } from '../../components/department/departmentDashboardData';
 import CalendarDatePicker from '../../components/department/CalendarDatePicker';
 import { BorrowingTrend, CategoryBars, StudentFaculty, CopyStatus, SuggestionBars, Utilization } from '../../components/department/Charts';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
@@ -33,15 +34,21 @@ export default function DepartmentDashboard() {
   };
   const clearDateRange = () => { setStart(''); setEnd(''); };
   const params = useMemo(() => ({ start_date: start, end_date: end, category_id: category, user_type: userType, suggestion_status: suggestionStatus, search }), [start, end, category, userType, suggestionStatus, search]);
-  const { data, loading, error, reload } = useDepartmentDashboard(token, params);
+  const { data: responseData, loading, error, reload } = useDepartmentDashboard(token, params);
+  const data = normalizeDepartmentDashboardResponse(responseData);
   useEffect(() => {
-    if (activeSection === 'dashboard' || !data) return;
+    if (activeSection === 'dashboard' || !responseData) return;
     const destination = activeSection === 'reports' ? 'department-reports' : 'department-suggestions';
     document.getElementById(destination)?.scrollIntoView({ behavior: 'auto', block: 'start' });
-  }, [activeSection, data]);
-  const s = data?.summary || {};
-  const c = data?.comparisons || {};
-  const fmt = value => new Intl.NumberFormat('en-IN').format(value ?? 0);
+  }, [activeSection, responseData]);
+  const s = data.summary;
+  const c = data.comparisons;
+  const fmt = value => {
+    const numeric = Number(value);
+    return value === null || value === undefined || value === '' || !Number.isFinite(numeric)
+      ? '—'
+      : new Intl.NumberFormat('en-IN').format(numeric);
+  };
   const navItems = [
     { id: 'dashboard', icon: Layers3, label: 'Dashboard' },
     { id: 'suggestions', icon: Lightbulb, label: 'Suggestions' },
@@ -169,12 +176,16 @@ export default function DepartmentDashboard() {
             </div>
           </div>
           {dateRangeInvalid && <div className="error-banner" role="alert">End date must be the same as or after the start date.</div>}
-          {error ?
-            <div className="error-banner">
+          {error && (
+            <div className="error-banner" role="alert" aria-live="polite">
               <span>{error}</span>
               <button onClick={reload}><RefreshCw size={15} />Retry</button>
-            </div> : loading ?
-              <div className="loading">Loading department analytics from the API…</div> : data ? <>
+            </div>
+          )}
+          {loading && !responseData && <div className="loading" role="status">Loading department analytics from the API…</div>}
+          {loading && responseData && <div className="loading" role="status">Refreshing department analytics…</div>}
+          {!loading && !error && !responseData && <div className="loading" role="status">No dashboard data returned.</div>}
+          {responseData && <>
                 <p className="metric-scope-note">Enabled accounts in {data?.scope?.name || 'this department'}; this is account status, not online activity or borrowing activity.</p>
                 <div className="kpis" id="department-reports">
                   <Card icon={<BookOpen />} title="Department Books" value={fmt(s.department_books)} change={c.department_books_change} tone="blue" />
@@ -187,22 +198,22 @@ export default function DepartmentDashboard() {
                 </div>
                 <div className="grid-3">
                   <Panel title="Monthly Borrowing Trend">
-                    <BorrowingTrend data={data.borrowing_trend} />
+                    <ChartOrEmpty component={BorrowingTrend} data={data.borrowing_trend} />
                   </Panel>
                   <Panel title="Borrowing by Category">
-                    <CategoryBars data={data.borrowing_by_category} />
+                    <ChartOrEmpty component={CategoryBars} data={data.borrowing_by_category} />
                   </Panel>
                   <Panel title="Student vs Faculty Borrowing">
-                    <StudentFaculty data={data.student_vs_faculty} />
+                    <ChartOrEmpty component={StudentFaculty} data={data.student_vs_faculty} />
                   </Panel>
                   <Panel title="Department Book Utilization">
-                    <Utilization data={data.book_utilization} />
+                    <ChartOrEmpty component={Utilization} data={data.book_utilization} />
                   </Panel>
                   <Panel title="Book Copy Status">
-                    <CopyStatus data={data.copy_status} />
+                    <ChartOrEmpty component={CopyStatus} data={data.copy_status} />
                   </Panel>
                   <Panel title="Suggestion Demand by Category">
-                    <SuggestionBars data={data.suggestion_demand} />
+                    <ChartOrEmpty component={SuggestionBars} data={data.suggestion_demand} />
                   </Panel>
                 </div>
                 <div className="bottom-grid">
@@ -211,37 +222,43 @@ export default function DepartmentDashboard() {
                   </Panel>
                   <div className="side-stack">
                     <Panel title="Top Suggested Books">
-                      <ol className="rank-list">{data.top_books.map((x, i) =>
-                        <li key={`${x.title}-${i}`}>
-                          <span className="rank">{i + 1}</span>
-                          <span>{x.title}</span>
-                          <b>{x.vote_count} votes</b>
-                        </li>)}
-                      </ol>
+                      {data.top_books.length === 0 ? <div className="empty">No suggested books yet.</div> :
+                        <ol className="rank-list">{data.top_books.map((x, i) =>
+                          <li key={`${x.title}-${i}`}>
+                            <span className="rank">{i + 1}</span>
+                            <span>{x.title}</span>
+                            <b>{x.vote_count} votes</b>
+                          </li>)}
+                        </ol>}
                     </Panel>
                     <Panel title="Recent Suggestions">
-                      <ul className="recent">{data.recent_suggestions.map(x =>
-                        <li key={x.id}>
-                          <div>
-                            <b>{x.title}</b>
-                            <small>
-                              {x.requester_type} · {new Date(x.created_at).toLocaleDateString('en-IN')}
-                            </small>
-                          </div>
-                          <span>{x.votes} votes</span>
-                        </li>)}
-                      </ul>
+                      {data.recent_suggestions.length === 0 ? <div className="empty">No recent suggestions.</div> :
+                        <ul className="recent">{data.recent_suggestions.map(x =>
+                          <li key={x.id}>
+                            <div>
+                              <b>{x.title}</b>
+                              <small>{x.requester_type} · {new Date(x.created_at).toLocaleDateString('en-IN')}</small>
+                            </div>
+                            <span>{x.votes} votes</span>
+                          </li>)}
+                        </ul>}
                     </Panel>
                   </div>
                 </div>
-              </> :
-                <div className="loading">No dashboard data returned.</div>}
+              </>}
         </div>
       </main>
     </div>
     </DashboardLayout>
   );
 }
+
+function ChartOrEmpty({ component: Chart, data }) {
+  return Array.isArray(data) && data.length > 0
+    ? <Chart data={data} />
+    : <div className="empty">No analytics for the selected filters.</div>;
+}
+
 function Card({ icon, title, value, change, tone }) {
   return (
     <div className={`kpi ${tone}`}>

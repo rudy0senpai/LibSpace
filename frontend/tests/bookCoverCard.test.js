@@ -56,8 +56,21 @@ test('cover images remain lazy-loaded and asynchronously decoded', () => {
   const markup = renderToStaticMarkup(React.createElement(BookCoverCard, {
     book: { id: 'book-3', title: 'Cover Example', cover_image_ref: 'https://covers.example/cover.jpg' },
   }));
+  assert.match(markup, /src="https:\/\/covers\.example\/cover\.jpg"/);
   assert.match(markup, /loading="lazy"/);
   assert.match(markup, /decoding="async"/);
+});
+
+test('expanded card does not expose legacy provenance JSON as a user description', () => {
+  const markup = renderToStaticMarkup(React.createElement(BookCoverCard, {
+    expanded: true,
+    book: {
+      id: 'book-provenance', title: 'Provenance Example',
+      description: '[Academic CSV provenance: {"dataset":"catalogue.csv"}]',
+    },
+  }));
+  assert.doesNotMatch(markup, /Academic CSV provenance|catalogue\.csv/);
+  assert.match(markup, /No description available\./);
 });
 
 test('cover and placeholder CSS reserve a 2:3 portrait frame without cropping', () => {
