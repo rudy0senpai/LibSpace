@@ -1,6 +1,6 @@
 # LibSphere — How to Run (Windows PowerShell)
 
-This guide is for the current prototype in this repository. **Normal mode** means local development with normal (email/password) API authentication; it does not mean that this prototype is production-ready. **Local Testing Mode** uses an isolated SQLite demo database and a passwordless demo login. Never enable testing authentication in production.
+This guide is for the current prototype in this repository. **Normal mode** means local development with normal (email/password) API authentication; it does not mean that this prototype is production-ready. **Local Testing Mode** uses an isolated SQLite demo database and role-based demo passwords. Never enable testing authentication in production.
 
 Run PowerShell commands from the repository root unless a step says otherwise. Use separate PowerShell windows for the backend and frontend. Environment variables set with `$env:...` apply only to that PowerShell process and its children; set them again in the other/new terminal when needed.
 
@@ -65,7 +65,7 @@ There is no configured migration framework/command. `backend/app.py` and `backen
 - `CORS_ORIGINS`: comma-separated exact browser origins allowed to call the API. Scheme, hostname, and port must match the frontend URL.
 - `FRONTEND_URL`: local frontend origin used in the default CORS list (`http://localhost:5173`).
 - `VITE_API_URL`: API base URL compiled/used by the frontend, normally `http://localhost:5001`.
-- `VITE_AUTH_MODE=testing`: shows the passwordless three-field demo login. Do not set this outside local testing.
+- `VITE_AUTH_MODE=testing`: shows the name, user ID, role, and password form for local demo login. Do not set this outside local testing.
 
 For a fresh local secret in the current PowerShell session, generate 32 random bytes (the value is never printed):
 
@@ -129,7 +129,7 @@ The local Flask server is the development server, and Vite's `dev` command is a 
 
 ## Local Testing Mode — SQLite demo data and test-only login
 
-Use only a disposable/local development machine. Testing mode accepts a seeded **name + user ID + role** and does not verify identity or require a password. It must never be enabled in production.
+Use only a disposable/local development machine. The standard launcher uses `backend/instance/libsphere_demo_full.db`, containing 119 sample books, generated copies/workflows, and demo accounts. It is separate from `libsphere.db`. Login checks the seeded **name + user ID + role + password**; this is still demo authentication, not identity verification. Never enable testing mode in production.
 
 ### Legacy test seeder safety gate
 
@@ -146,25 +146,17 @@ $env:TEST_DATABASE_URL = 'sqlite:///libsphere_test.db'
 Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue
 ```
 
-The in-memory seeder builds role/circulation fixtures for automated tests. On a file-backed path the legacy blank-ISBN fixture is gated and not upserted; the existing persistent database retains its current users, books, copies, loans, reservations, suggestions, notifications, and audit rows. The explicit `--reset` option still deletes the configured SQLite file plus WAL/SHM sidecars and is unsafe as a workaround; do not use it to bypass the seeding guard. `scripts/run_backend.ps1` invokes the file-backed seeder, which is a no-op for an already populated test database and refuses a fresh one whose catalog source is blank ISBN.
+The in-memory seeder builds role/circulation fixtures for automated tests. The local launcher has a separate helper that snapshots the fixture into `libsphere_demo_full.db` for the UI; it does not touch the regular development database. The explicit `--reset` option still deletes the configured SQLite file plus WAL/SHM sidecars and is unsafe as a workaround; do not use it to bypass the seeding guard.
 
 ### Start the backend
 
-In the first PowerShell window, from the repository root:
+From the repository root, start the backend with the platform launcher:
 
 ```powershell
-$python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
-Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-$env:APP_ENV = 'testing'
-$env:DATABASE_URL = 'sqlite:///libsphere_test.db'
-$env:CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
-$bytes = New-Object byte[] 32
-$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-$rng.GetBytes($bytes)
-$env:JWT_SECRET_KEY = [Convert]::ToBase64String($bytes)
-$rng.Dispose()
-& $python .\backend\app.py
+.\scripts\run_backend.ps1
 ```
+
+On macOS, use `./scripts/run_backend.sh`. The launcher prepares the demo database and password hashes before starting Flask.
 
 `app.py` runs `db.create_all()` when launched. With an already initialized test DB, this is non-destructive table creation/check behavior; it does not execute the seeder. The health endpoint checks that the database responds and the required tables exist.
 
@@ -183,22 +175,22 @@ Open **http://127.0.0.1:5173**. The backend/API is **http://127.0.0.1:5001**; he
 
 ### Demo profiles and read-only verification
 
-The supported test login fields are exact **Name**, **User ID**, and **Role** (role selector values `STUDENT`, `FACULTY`, `DEPARTMENT`, `LIBRARIAN`). The required seeded profiles are:
+The supported test login fields are exact **Name**, **User ID**, **Role**, and **Password** (role selector values `STUDENT`, `FACULTY`, `DEPARTMENT`, `LIBRARIAN`). The required seeded profiles are:
 
-| Name | User ID | Role |
-|---|---|---|
-| Urvashi | `25EMCAD016` | `STUDENT` |
-| Yashdeep | `25TECAD016` | `FACULTY` (UI label: Teacher) |
-| Dhruv | `25DMCAD016` | `DEPARTMENT` |
-| Sphere | `25LIB016` | `LIBRARIAN` |
+| Name | User ID | Role | Password |
+|---|---|---|---|
+| Urvashi | `25EMCAD016` | `STUDENT` | `1234` |
+| Yashdeep | `25TECAD016` | `FACULTY` (UI label: Teacher) | `1234` |
+| Dhruv | `25DMCAD016` | `DEPARTMENT` | `1234` |
+| Sphere | `25LIB016` | `LIBRARIAN` | `1234` |
 
-The seeder also creates a 141-account cohort: 100 students, 30 faculty, 9 department accounts, and 2 librarians, plus a 119-title catalog and 238 copies. These are demo identities, not verified MITRC personnel. The IDs are matched case-insensitively and surrounding whitespace is trimmed.
+All local demo accounts use the shared password `1234`, and the database stores only scrypt hashes. Change the value in `backend/configure_local_demo_passwords.py` to choose another password for future launcher setup. These credentials are only for disposable local demos. The launcher also creates 141 demo accounts: 100 students, 30 faculty, 9 department accounts, and 2 librarians, plus a 119-title sample catalog and 238 copies. These are demo identities, not verified MITRC personnel. The IDs are matched case-insensitively and surrounding whitespace is trimmed.
 
 Verify without changing database contents:
 
 ```powershell
 Invoke-RestMethod -Uri 'http://127.0.0.1:5001/api/health'
-$loginBody = @{ name = 'Urvashi'; user_id = '25EMCAD016'; role = 'STUDENT' } | ConvertTo-Json
+$loginBody = @{ name = 'Urvashi'; user_id = '25EMCAD016'; role = 'STUDENT'; password = '1234' } | ConvertTo-Json
 $session = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5001/api/auth/login' -ContentType 'application/json' -Body $loginBody
 $headers = @{ Authorization = "Bearer $($session.data.access_token)" }
 $catalog = Invoke-RestMethod -Uri 'http://127.0.0.1:5001/api/books/search?q=Clean' -Headers $headers
@@ -211,7 +203,7 @@ A valid test login returns an access token and user data; the authenticated cata
 
 From the repository root:
 
-- `scripts/run_backend.ps1` is a testing-mode launcher. It removes `PYTHONPATH`, creates the venv if missing, installs backend requirements, selects SQLite/testing/CORS/ephemeral JWT settings, and starts Flask without running a seeder. It requires the existing `backend/instance/libsphere_test.db`; a missing file fails closed because the legacy blank-ISBN seed catalog is not a safe fresh persistent source.
+- `scripts/run_backend.ps1` and `scripts/run_backend.sh` initialize the isolated local demo database when missing, configure role-based password hashes once, install backend requirements, and start Flask in SQLite testing mode.
 - `scripts/run_frontend.ps1` sets `VITE_API_URL=http://localhost:5001`, `VITE_AUTH_MODE=testing`, installs frontend dependencies with `npm install` only if `frontend/node_modules` is missing, and starts Vite at port 5173. This is a testing-mode launcher, not a normal-mode launcher.
 - No separate normal-mode backend launcher is provided. Use the manual normal-mode commands above.
 
@@ -460,25 +452,13 @@ Check that Flask is listening on port 5001 and request `http://127.0.0.1:5001/ap
 
 ### Database connection or missing demo accounts
 
-Check the backend terminal error, `APP_ENV`, and `DATABASE_URL`; testing mode refuses non-SQLite URLs. Confirm the configured test file is `backend/instance/libsphere_test.db`. The health endpoint checks schema/connectivity only, not account counts. If no test profile can log in, confirm the test seed is present before deciding to seed; run the optional seed command only if you accept its documented writes. Never use `--reset` as a first troubleshooting step.
+Check the backend terminal error, `APP_ENV`, and `DATABASE_URL`; testing mode refuses non-SQLite URLs. The standard local launcher uses `backend/instance/libsphere_demo_full.db`; manual test workflows may explicitly use `backend/instance/libsphere_test.db`. The health endpoint checks schema/connectivity only, not account counts. If no demo profile can log in, confirm the launcher completed its local setup. Never use `--reset` as a first troubleshooting step.
 
 ### Authentication or role-routing failures
 
-In testing mode, ensure both processes use testing mode: backend `APP_ENV=testing` and frontend `VITE_AUTH_MODE=testing`. Use a listed demo name, ID, and matching role; all three must identify the same seeded account. Role routes use the role returned by the backend, not a role-only UI choice. In normal mode, the backend login API expects email/password but the current frontend deliberately shows no credential form; passwordless demo login works only when both testing-mode gates are enabled. Do not enable those gates in production.
+In testing mode, ensure both processes use testing mode: backend `APP_ENV=testing` and frontend `VITE_AUTH_MODE=testing`. Enter a listed demo name, ID, role, and matching role password. Role routes use the role returned by the backend, not a role-only UI choice. In normal mode, the backend login API expects email/password but the current frontend deliberately shows no credential form. Do not enable testing mode in production.
 
-If the three-field form displays **“Email and password are required.”**, do not change the frontend payload or weaken authentication. That is the backend's normal-auth `MISSING_CREDENTIALS` response: the Vite process is using `VITE_AUTH_MODE=testing`, but the Flask process is not using `APP_ENV=testing`. Stop only the confirmed LibSphere backend process, then restart it from the repository root with the testing SQLite URL and without running the seeder:
-
-```powershell
-$python = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
-Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-$env:APP_ENV = 'testing'
-$env:DATABASE_URL = 'sqlite:///libsphere_test.db'
-$env:CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
-# Generate/set JWT_SECRET_KEY in this same PowerShell session using the snippet above.
-& $python .\backend\app.py
-```
-
-Keep the Vite process at `VITE_AUTH_MODE=testing`; restart it if that environment value was changed. A genuinely mismatched name/ID/role in a testing backend returns HTTP 401 `INVALID_IDENTITY` with “Name, user ID, and role did not match an active local testing account.”
+If the testing form displays **“Email and password are required.”**, Vite is in testing mode but Flask is not. Restart the backend using the platform launcher. A wrong identity or demo password returns HTTP 401 `INVALID_CREDENTIALS`.
 
 ## Stop and restart
 

@@ -59,9 +59,9 @@ MITRC-LibSphere/
 ```
 Only these directories plus `.env.example`, `.gitignore`, `docker-compose.yml` and `README.md` belong in the first milestone; everything else is created progressively.
 
-## Local SQLite testing (Windows PowerShell)
+## Local SQLite testing
 
-SQLite is the sole database used by the current local development and testing workflow. Persistent testing data is stored in `backend/instance/libsphere_test.db`; the local-development default is `backend/instance/libsphere.db`. Flask resolves relative SQLite URLs beneath its instance directory. The checked-in legacy seed catalog has blank ISBNs and is retained only for isolated in-memory tests. File-backed `seed_test_db.py` refuses a fresh database without an ISBN-backed source and returns without row upserts when an existing persistent catalog is present; it never resets or reseeds persistent data.
+SQLite is the local development and testing database. The standard launchers use `backend/instance/libsphere_demo_full.db`, an isolated demo database with 119 books, sample copies and workflows, and test accounts. The existing `backend/instance/libsphere.db` is left untouched. The regular development default remains `libsphere.db`; Flask resolves relative SQLite URLs under `backend/instance`.
 
 1. From the repository root, create the backend virtual environment if needed and install dependencies:
 
@@ -71,20 +71,17 @@ SQLite is the sole database used by the current local development and testing wo
    & $python -m pip install -r .\backend\requirements.txt
    ```
 
-2. The old JSON fixture is not a safe source for fresh file-backed seeding. Do not run `--reset` or invoke `seed_test_db.py` to repopulate the persistent testing DB. Automated tests use an isolated in-memory SQLite database and may load the legacy fixture there. For a new persistent catalogue, first use the reviewed academic CSV preflight/import workflow in `HOW_TO_RUN.md`; that import does not create copies or demo user accounts.
+2. Use the launch scripts for the local demo database. They create it from an isolated in-memory fixture only when it is missing and do not reset it on later starts. This generated demo data is for local UI testing, not a verified physical library inventory. For a curated catalogue, use the academic CSV preflight/import workflow in `HOW_TO_RUN.md`.
 
 3. Start the backend in a PowerShell window:
 
    ```powershell
-   Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-   $env:APP_ENV = 'testing'
-   $env:DATABASE_URL = 'sqlite:///libsphere_test.db'
-   $env:CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
-   $env:JWT_SECRET_KEY = ([guid]::NewGuid().ToString() + [guid]::NewGuid().ToString())
-   & $python .\backend\app.py
+   .\scripts\run_backend.ps1
    ```
 
-4. Start the frontend in another PowerShell window (the testing mode exposes only the three-field demo form):
+   On macOS, run `./scripts/run_backend.sh` from the repository root.
+
+4. Start the frontend in another terminal (testing mode shows the name, ID, role, and password form):
 
    ```powershell
    $env:VITE_API_URL = 'http://localhost:5001'
@@ -92,18 +89,20 @@ SQLite is the sole database used by the current local development and testing wo
    .\scripts\run_frontend.ps1
    ```
 
-5. Open `http://127.0.0.1:5173` and check `http://127.0.0.1:5001/api/health`. Demo identities (no passwords; valid only while the backend has `APP_ENV=testing`):
+   On macOS, run `./scripts/run_frontend.sh`.
 
-   | Name | User ID | Role |
-   |---|---|---|
-   | Urvashi | `25EMCAD016` | `STUDENT` |
-   | Yashdeep | `25TECAD016` | `FACULTY` (UI label: Teacher) |
-   | Dhruv | `25DMCAD016` | `DEPARTMENT` |
-   | Sphere | `25LIB016` | `LIBRARIAN` |
+5. Open `http://127.0.0.1:5173` and check `http://127.0.0.1:5001/api/health`. Demo identities and local-only passwords:
 
-   This is deliberately passwordless test authentication, not identity verification. The frontend shows this three-field form only when `VITE_AUTH_MODE=testing`; otherwise it displays no login fields. The backend accepts the seeded profiles only while `APP_ENV=testing`. Existing production API authentication remains unchanged and does not accept this passwordless flow.
+   | Name | User ID | Role | Password |
+   |---|---|---|---|
+   | Urvashi | `25EMCAD016` | `STUDENT` | `1234` |
+   | Yashdeep | `25TECAD016` | `FACULTY` (UI label: Teacher) | `1234` |
+   | Dhruv | `25DMCAD016` | `DEPARTMENT` | `1234` |
+   | Sphere | `25LIB016` | `LIBRARIAN` | `1234` |
 
-The isolated in-memory test fixture contains 119 legacy titles and generated demo copies solely for automated tests; it does not describe the live file-backed catalogue. The active test SQLite file is the separate imported/curated catalogue documented in `HOW_TO_RUN.md`. The academic import did not create physical copies or modify seeded user/workflow counts.
+   Local testing checks all four fields and stores only scrypt password hashes. `1234` is a shared demo password for disposable local testing; it is not suitable for real accounts or public deployment. The backend accepts these accounts only while `APP_ENV=testing`; production authentication remains email/password based.
+
+The automated test suite still uses an isolated in-memory fixture. The launcher’s separate `libsphere_demo_full.db` contains sample copies and workflow records so the UI has content to display; those sample circulation records do not describe real holdings.
 
 ### Department testing accounts
 

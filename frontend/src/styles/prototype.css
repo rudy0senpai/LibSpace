@@ -436,6 +436,41 @@
     font-size: 12px
 }
 
+.prototype-recommend-list {
+    display: grid;
+    gap: 8px;
+}
+
+.prototype-recommend-list .prototype-recommend {
+    min-width: 0;
+    margin: 0;
+}
+
+.prototype-recommend-list .prototype-recommend b {
+    display: block;
+    line-height: 1.35;
+}
+
+.prototype-recommend-list .prototype-recommend p {
+    margin: 7px 0;
+    color: var(--dashboard-muted, #64748b);
+    font-size: 11px;
+}
+
+.prototype-recommend-list .prototype-recommend button {
+    padding: 0;
+    border: 0;
+    color: #3659a2;
+    background: none;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.prototype-recommend-list .prototype-recommend button:hover {
+    text-decoration: underline;
+}
+
 .prototype-search {
     display: flex;
     align-items: center;

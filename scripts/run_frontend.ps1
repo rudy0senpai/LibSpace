@@ -3,7 +3,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $frontend = Join-Path $repoRoot 'frontend'
 Set-Location $frontend
 
-# Expose the seeded three-field demo login only in the local testing UI.
+# Expose the local name, ID, role, and password form only in the testing UI.
 $env:VITE_API_URL = 'http://localhost:5001'
 $env:VITE_AUTH_MODE = 'testing'
 

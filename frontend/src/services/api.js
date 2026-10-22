@@ -36,6 +36,11 @@ export async function getMyLoans() {
   return fetchWithAuth('/api/users/me/loans');
 }
 
+export async function getMyRecommendations(limit = 5) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return fetchWithAuth(`/api/users/me/recommendations?${query}`);
+}
+
 export async function requestBook(bookId) {
   return fetchWithAuth('/api/users/me/loans/requests', {
     method: 'POST',

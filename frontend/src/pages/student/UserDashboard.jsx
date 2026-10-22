@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, useEffect } from 'react';
 import { BookOpen, Lightbulb, LogOut, Search, Table2, ArrowUp, Plus, Loader2 } from 'lucide-react';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
-import { searchBooks, getMyLoans, getMySuggestions, createSuggestion, voteSuggestion, getCategories, requestBook, cancelMyLoan } from '../../services/api';
+import { searchBooks, getMyLoans, getMyRecommendations, getMySuggestions, createSuggestion, voteSuggestion, getCategories, requestBook, cancelMyLoan } from '../../services/api';
 import RequestedBooks from './RequestedBooks';
 import VirtualBookGrid from './VirtualBookGrid';
 import BookCoverCard from '../../components/catalogue/BookCoverCard';
@@ -16,6 +16,9 @@ export default function UserDashboard() {
   const [suggestions, setSuggestions] = useState([]);
   const [books, setBooks] = useState([]);
   const [loans, setLoans] = useState([]);
+  const [recommendations, setRecommendations] = useState([]);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(true);
+  const [recommendationsError, setRecommendationsError] = useState('');
   const [categories, setCategories] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -33,6 +36,7 @@ export default function UserDashboard() {
   const [searchTotal, setSearchTotal] = useState(0);
   const searchSequence = useRef(0);
   const suggestionLoadSequence = useRef(0);
+  const recommendationLoadSequence = useRef(0);
   const activeBookIds = useMemo(() => new Set(loans.filter(loan => ['REQUESTED', 'APPROVED', 'BORROWED', 'OVERDUE'].includes(loan.status)).map(loan => loan.book_id)), [loans]);
   const firstName = user?.name?.split(' ')[0] || 'Student';
 
@@ -44,6 +48,7 @@ export default function UserDashboard() {
     setError('');
     loadCategories();
     loadMyLoans();
+    loadRecommendations();
     loadMySuggestions();
   }, [user?.id]);
 
@@ -67,6 +72,23 @@ export default function UserDashboard() {
       setLoanError(e.message || 'Failed to load your requested books.');
     } finally {
       setLoansLoading(false);
+    }
+  }
+
+  async function loadRecommendations() {
+    const sequence = ++recommendationLoadSequence.current;
+    setRecommendationsLoading(true);
+    setRecommendationsError('');
+    try {
+      const res = await getMyRecommendations();
+      if (sequence === recommendationLoadSequence.current) setRecommendations(res.data?.items || []);
+    } catch (e) {
+      if (sequence === recommendationLoadSequence.current) {
+        setRecommendations([]);
+        setRecommendationsError(e.message || 'Unable to load recommendations.');
+      }
+    } finally {
+      if (sequence === recommendationLoadSequence.current) setRecommendationsLoading(false);
     }
   }
 
@@ -257,9 +279,24 @@ export default function UserDashboard() {
                   )}
                 </Panel>
                 <Panel title="Recommended for You">
-                  <div className="prototype-recommend">
-                    <small>Recommendations are not available yet.</small>
-                  </div>
+                  {recommendationsLoading ? (
+                    <div className="prototype-recommend"><small>Finding books for you…</small></div>
+                  ) : recommendations.length ? (
+                    <div className="prototype-recommend-list">
+                      {recommendations.map(book => (
+                        <article className="prototype-recommend" key={book.id}>
+                          <b>{book.title}</b>
+                          <small>{book.author || 'Author not listed'}{book.category ? ` · ${book.category}` : ''}</small>
+                          <p>{book.reason}</p>
+                          <button type="button" onClick={() => openCatalogue(book.title)}>Find in catalogue</button>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="prototype-recommend">
+                      <small>{recommendationsError || 'No available books to recommend right now.'}</small>
+                    </div>
+                  )}
                 </Panel>
               </div>
               <RequestedBooks loans={loans} loading={loansLoading} error={loanError} onRetry={loadMyLoans} onCancel={handleCancel} cancellingId={cancellingId} />

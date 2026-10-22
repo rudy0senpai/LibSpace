@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BookOpen, ChevronDown, Contact, LoaderCircle, UserRound, UsersRound } from 'lucide-react';
+import { BookOpen, ChevronDown, Contact, LoaderCircle, LockKeyhole, UserRound, UsersRound } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import LampThemeToggle from '../../components/auth/LampThemeToggle';
 import { getDashboardRoute } from '../../services/roleRoutes';
@@ -16,6 +16,7 @@ export default function Login() {
   const { signIn, restoreError } = useAuth();
   const [name, setName] = useState('');
   const [userId, setUserId] = useState('');
+  const [password, setPassword] = useState('');
   const [role, setRole] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -28,6 +29,7 @@ export default function Login() {
       name: name.trim() ? '' : 'Enter your name.',
       userId: userId.trim() ? '' : 'Enter your user ID.',
       role: role ? '' : 'Select your role.',
+      password: password ? '' : 'Enter your password.',
     };
     setFieldErrors(errors);
     if (Object.values(errors).some(Boolean)) return;
@@ -35,7 +37,7 @@ export default function Login() {
     setBusy(true);
     setError('');
     try {
-      const credentials = { name: name.trim(), user_id: userId.trim(), role };
+      const credentials = { name: name.trim(), user_id: userId.trim(), role, password };
       const session = await signIn(credentials);
       const destination = getDashboardRoute(session.user.role);
       if (!destination) throw new Error('The account role has no dashboard route.');
@@ -88,6 +90,13 @@ export default function Login() {
                   <ChevronDown aria-hidden="true" />
                 </span>
                 {fieldErrors.role && <small id="login-role-error" className="lamp-login-field-error">{fieldErrors.role}</small>}
+              </label>
+              <label className="lamp-login-field" htmlFor="login-password">Password
+                <span className={`lamp-login-control ${fieldErrors.password ? 'invalid' : ''}`}>
+                  <LockKeyhole aria-hidden="true" />
+                  <input id="login-password" type="password" autoComplete="current-password" placeholder="Enter your password" value={password} onChange={e => { setPassword(e.target.value); setFieldErrors(current => ({ ...current, password: '' })); }} aria-invalid={Boolean(fieldErrors.password)} aria-describedby={fieldErrors.password ? 'login-password-error' : undefined} />
+                </span>
+                {fieldErrors.password && <small id="login-password-error" className="lamp-login-field-error">{fieldErrors.password}</small>}
               </label>
             </>
             {restoreError && <div className="lamp-login-error" role="alert">Saved session could not be checked: {restoreError}</div>}

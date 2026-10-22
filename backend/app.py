@@ -551,11 +551,20 @@ def login():
         name_key = canonicalize_name(data.get("name"))
         user_id_key = canonicalize_user_id(data.get("user_id"))
         requested_role = canonicalize_role(data.get("role"))
+        password = data.get("password")
         public_roles = {"STUDENT", "FACULTY", "DEPARTMENT", "LIBRARIAN"}
         if not name_key or not user_id_key or requested_role not in public_roles:
             return jsonify({"status": "error", "error": {
                 "code": "INVALID_IDENTITY", "message": "Name, user ID, and a valid testing role are required."
             }}), 401
+        if password is not None and (not isinstance(password, str) or len(password) > 128):
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_CREDENTIALS", "message": "Invalid local testing credentials."
+            }}), 401
+        if not password and not app.testing:
+            return jsonify({"status": "error", "error": {
+                "code": "MISSING_CREDENTIALS", "message": "A password is required for local testing accounts."
+            }}), 400
         role = RoleType(requested_role)
         identifier_field = User.enrollment_id if role == RoleType.STUDENT else User.employee_id
         candidates = db.session.query(User).filter(
@@ -566,9 +575,13 @@ def login():
         user = next((candidate for candidate in candidates
                      if canonicalize_name(candidate.name) == name_key
                      and canonicalize_user_id(getattr(candidate, identifier_field.key)) == user_id_key), None)
-        if not user:
+        if not user and app.testing and not password:
             return jsonify({"status": "error", "error": {
                 "code": "INVALID_IDENTITY", "message": "Name, user ID, and role did not match an active local testing account."
+            }}), 401
+        if not user or (password and not check_password_hash(user.password_hash, password)) or (not password and not app.testing):
+            return jsonify({"status": "error", "error": {
+                "code": "INVALID_CREDENTIALS", "message": "Name, user ID, role, or password did not match an active local testing account."
             }}), 401
     else:
         email = str(data.get("email", "")).strip()
@@ -989,6 +1002,115 @@ def my_loans():
         db.session.rollback()
         app.logger.exception("My loans failed")
         return jsonify({"status": "error", "error": {"code": "LOANS_FAILED", "message": "Unable to load your borrowing history."}}), 500
+
+
+@app.route("/api/users/me/recommendations", methods=["GET"])
+@jwt_required()
+def my_recommendations():
+    user = authenticated_active_user()
+    if not user:
+        return jsonify({"status": "error", "error": {"code": "ACCOUNT_DISABLED", "message": "Active account required."}}), 401
+    if user.role not in {RoleType.STUDENT, RoleType.FACULTY}:
+        return jsonify({"status": "error", "error": {"code": "FORBIDDEN", "message": "Recommendations are available to students and faculty."}}), 403
+
+    try:
+        try:
+            limit = max(1, min(int(request.args.get("limit", 5)), 12))
+        except (TypeError, ValueError):
+            limit = 5
+
+        history_statuses = (LoanStatus.BORROWED, LoanStatus.RETURNED, LoanStatus.OVERDUE)
+        excluded_statuses = (*history_statuses, LoanStatus.REQUESTED, LoanStatus.APPROVED)
+        history_rows = db.session.query(Book).join(BookCopy).join(Loan).filter(
+            Loan.user_id == user.id,
+            Loan.status.in_(history_statuses),
+        ).order_by(Loan.created_at.desc()).distinct().all()
+        excluded_book_ids = {
+            str(book_id) for (book_id,) in db.session.query(BookCopy.book_id).join(Loan).filter(
+                Loan.user_id == user.id,
+                Loan.status.in_(excluded_statuses),
+            ).all()
+        }
+
+        available_counts = dict(db.session.query(
+            BookCopy.book_id, func.count(BookCopy.id)
+        ).filter(BookCopy.status == CopyStatus.AVAILABLE).group_by(BookCopy.book_id).all())
+        borrow_counts = dict(db.session.query(
+            BookCopy.book_id, func.count(Loan.id)
+        ).join(Loan, Loan.book_copy_id == BookCopy.id).group_by(BookCopy.book_id).all())
+        available_books = db.session.query(Book).filter(
+            Book.id.in_(available_counts.keys()) if available_counts else text("1 = 0")
+        ).all()
+
+        def catalog_record(book):
+            departments = [department.name for department in book.departments]
+            category = book.category.name if book.category else ""
+            author_names = ", ".join(author.name for author in book.authors)
+            return {
+                "id": str(book.id),
+                "title": book.title,
+                "isbn": book.isbn or "",
+                "authors": author_names,
+                "author": author_names,
+                "category": category,
+                "subject_area": category,
+                "subjects": ", ".join(departments),
+                "programme": ", ".join(departments),
+                "publisher": book.publisher.name if book.publisher else "",
+                "language": book.language or "",
+                "publication_year": book.publication_year,
+                "edition": book.edition or "",
+                "cover_image_ref": book.cover_image_ref or "",
+                "available": int(available_counts.get(book.id, 0)),
+                "total": len(book.copies),
+            }
+
+        records_by_id = {str(book.id): catalog_record(book) for book in available_books}
+        history_records = [catalog_record(book) for book in history_rows]
+        recommendations = []
+        strategy = "borrowing_history"
+        if history_records and records_by_id:
+            try:
+                from recommendation_system_model.recommendation.recommender import get_recommender
+
+                recommendations = get_recommender().recommend_from_catalog(
+                    history_records,
+                    records_by_id.values(),
+                    limit=limit,
+                    exclude_book_ids=excluded_book_ids,
+                )
+            except Exception:
+                app.logger.exception("AI book recommendations unavailable; using library popularity fallback")
+
+        if recommendations:
+            strategy = "borrowing_history"
+        else:
+            strategy = "top_books"
+            popular_books = sorted(
+                (record for book_id, record in records_by_id.items() if book_id not in excluded_book_ids),
+                key=lambda record: (
+                    -int(borrow_counts.get(uuid.UUID(record["id"]), 0)),
+                    -record["available"],
+                    record["title"].casefold(),
+                ),
+            )[:limit]
+            recommendations = [{
+                **record,
+                "score": 0,
+                "strategy": strategy,
+                "reason": "Popular books in the library, recommended as a starting point.",
+            } for record in popular_books]
+
+        return jsonify({
+            "status": "success",
+            "data": {"items": recommendations, "strategy": strategy},
+        }), 200
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Book recommendations failed")
+        return jsonify({"status": "error", "error": {
+            "code": "RECOMMENDATIONS_FAILED", "message": "Unable to load book recommendations."
+        }}), 500
 
 
 @app.route("/api/users/me/loans/requests", methods=["POST"])
